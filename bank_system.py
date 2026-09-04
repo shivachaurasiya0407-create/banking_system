@@ -9,22 +9,46 @@ class Bank:
   def create_account(self):   
     while True: 
       # Name Input
-      self.name = input("Enter Name :").strip()
-
+      while True:
+        self.name = str(input("Enter Name :")).upper()
+        for i in self.name:
+          if not i.isalpha() and i != " ":
+            print("Special character found :",i)
+            break
+        else:
+          print("Valid Name")
+          break  
+      
        # Phone Number input  
       while True: 
         self.phone = input("Phone No.:").strip()  
         if len(self.phone) == 10 and self.phone.isdigit():  
           break 
-        print("Invalid Phone number")
+        print("Enter Only Digit and  10 Digit Phone number")
 
+        # gender choise
+      while True:
+        select_gender =   input("Select Gender\n1.Male\n2.Female\n3.Other\nOption :").strip().lower()
+        if select_gender == "1" or select_gender == "male":
+          self.gender = "Male"
+          break
+        elif select_gender == "2" or select_gender == "female":
+          self.gender ="Female"
+          break
+        elif select_gender == "3" or select_gender == "other":
+          self.gender ="Other"
+          break     
+        else:
+          print("Invlid Choise")
+          
+               
       # Age input
       while True:
         try:  
            self.age = int(input("Age :"))  
-           if self.age>=18: 
+           if self.age>=18 and self.age <=110:
              break
-           print("You Are Not Eligible to open Account (Must be 18+).\n") 
+           print("You Are Not Eligible to open Account (Must be 18+) & wrong age\n") 
            return
         except ValueError:
           print("Enter Age in Digit")
@@ -37,7 +61,7 @@ class Bank:
             print("Aadhaar number alredy exists")
             return
           break
-        print("Invalid Aadhaar Number. Must be 12 digits.")
+        print("Invalid Aadhaar Number. Must be 12 digits.or only number")
 
       # Account Number Generation
       while True:
@@ -59,7 +83,7 @@ class Bank:
 
       # 7. Write to CSV file
       file_exists = os.path.exists(self.FILE)
-      fieldnames = ["Name","Phone","Age","Aadhar","Account_no","Balance"]
+      fieldnames = ["Name","Phone","Age","Gender","Aadhar","Account_no","Balance"]
 
       with open(self.FILE, "a",newline="",encoding="utf-8") as file:
        
@@ -70,6 +94,7 @@ class Bank:
                 "Name": self.name, 
                 "Phone": self.phone, 
                 "Age": self.age, 
+                "Gender": self.gender,
                 "Aadhar": self.aadhar_no, 
                 "Account_no": self.account_no, 
                 "Balance": self.balance
@@ -78,6 +103,7 @@ class Bank:
       print("Name        :",self.name)
       print("Phone       :",self.phone)
       print("Age         :",self.age)
+      print("Gender      :",self.gender)
       print("Aadhar No.  :",self.aadhar_no)
       print("Account no. :",self.account_no)
       print("Balance     :",self.balance)
@@ -185,8 +211,29 @@ class Bank:
     new_balance = current_balance - amount
     self.update_balance(account_no,new_balance)
     print("Withdrawn      :",amount)
-    print("Current Balance :",new_balance) 
+    print("Current Balance :",new_balance)
 
+   # account info 
+  def account_info(self):
+    account_no = input("Account Number :")
+    if not account_no.isdigit():
+      print("Invalid Account number and onl digit allow")
+      return 
+    
+    account_no = int(account_no)
+    account = self.find_account(account_no)
+    if account is None:
+      print("Account number not exists") 
+      return
+    print("\n Account Details :")
+    print("Name        :",account["Name"])
+    print("Phone       :",account["Phone"])
+    print("Age         :",account["Age"])
+    print("Gender      :",account["Gender"])
+    print("Aadhar No.  :",account["Aadhar"])
+    print("Account no. :",account["Account_no"])
+    print("Balance     :",account["Balance"])
+    
     # Balance update in csv file
   def update_balance(self,account_no,new_balance):
     accounts = []  
@@ -199,7 +246,7 @@ class Bank:
         if row["Account_no"] == str(account_no).strip():
           row["Balance"] = str(new_balance)
         accounts.append(row)
-    fieldnames = ["Name","Phone","Age","Aadhar","Account_no","Balance"]    
+    fieldnames = ["Name","Phone","Gender","Age","Aadhar","Account_no","Balance"]    
 
     with open(self.FILE,"w",newline="",encoding="utf-8") as file:
       writer = csv.DictWriter(file,fieldnames=fieldnames)
@@ -214,29 +261,32 @@ print(f"{'BANKING SYSTEM':^60}")
 print("=" * 60)
 while True :
   
-  print("------ Our Services ------ \n1.Account Open\n2.Check Balance\n3.Deposite Money\n4.Withdraw Money\n5.Exit")
+  print("------ Our Services ------ \n1.Account Open\n2.Check Balance\n3.Deposite Money\n4.Withdraw Money\n5.Account info\n6.Exit")
   try:
-    service = int(input("Choose Service :"))
+    service = input("Choose Service :").strip().lower()
 
   except ValueError:
     print("Pleace Enter a Number")
     continue  
-  if service == 1: 
+  if service == "1" or service == "account open": 
     print("\n--- Account Opening ---") 
     bank_obj.create_account() 
    
-  elif service == 2: 
+  elif service == "2" or service == "check balance": 
     bank_obj.balance_check() 
     
-  elif service == 3: 
+  elif service == "3" or service == "deposite money": 
     print("\n --- Deposite Money ---") 
     bank_obj.deposite_money() 
    
-  elif service == 4: 
+  elif service == "4" or service == "withdraw money": 
     print("\n --- Withdraw Money ---") 
     bank_obj.withdraw_money() 
 
-  elif service == 5: 
+  elif service =="5" or service == "account info":
+    bank_obj.account_info()  
+
+  elif service == "6" or service == "exit": 
    print(" ====== Thank you for using our bank ======")
    break 
   else: 
