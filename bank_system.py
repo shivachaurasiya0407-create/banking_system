@@ -287,7 +287,7 @@ while True :
     bank_obj.account_info()  
 
   elif service == "6" or service == "exit": 
-   print(" ====== Thank you for using our bank ======")
+   print(" ======= Thank you for using our bank =======")
    break 
   else: 
    print("Invalid service")
