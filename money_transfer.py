@@ -32,12 +32,3 @@ def money_transfer():
     print("Transfer Sucessfull")
 
 # money = money_transfer()    
-      
-
- 
-
-    
-
-
-        
-    
