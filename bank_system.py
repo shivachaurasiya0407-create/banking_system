@@ -1,13 +1,16 @@
 import random 
+from difflib import get_close_matches
 import csv
 import os
 from datetime import datetime
 import uuid
 class Bank: 
-  FILE ="Accounts.csv"     # File name
+  FILE ="Accounts.csv"   # File name
+  bank_code = "SHIV"  
 
   def __init__(self): 
     self.balance = 0
+    self.branch_number = 1
       
   def create_account(self):   
     if not os.path.exists("Transaction_history"):
@@ -51,6 +54,39 @@ class Bank:
         except ValueError:
           print("Enter Age in Digit")
 
+      #country
+      while True:
+         
+        country_list = ["India"]
+
+        self.country_input = input("Country :")
+        for country in country_list:
+              if country == self.country_input.lower():
+                  return country
+        matches_c = get_close_matches(self.country_input,country_list,n=1,cutoff=0.75)
+        if matches_c:
+            # return matches_c[0]
+            print("Matched Country:",matches_c[0])
+            break
+        else:
+          print("Invalid Country")
+      
+      #state    
+      while True: 
+        india_state = ["Andaman and Nicobar Islands","Andhra Pradesh","Arunachal Pradesh","Assam","Bihar","Chhattisgarh","Dadra and nagar Haveli and Damanand Diu","Delhi","Goa","Gujarat","Haryana","Himachal Pradesh","Jammu and Kashmir","Jharkhand","Karnataka","Kerala","Ladakh","Lakshadweep","Madhy Pradesh","Maharashtra","Manipur","Meghalaya","Mizora","Nagaland","Odisha","Puducherry","Punjab","Rajasthan","Sikkim","Tamil Nadu","Telangana","Tripura","Uttar Pradesh","Uttarakhand","West bengal"]    
+        
+        self.state_input = input("State :").lower()
+        for state in india_state:
+          if state == self.state_input:
+              return state        
+        matches = get_close_matches(self.state_input,india_state,n=1,cutoff=0.75)
+        if matches:
+            print("Matched State:",matches[0])
+            break
+        else:
+          print("Invalid State")
+        
+
       # Aadhaar Input
       while True:    
         self.aadhar_no = input("Aadhar (12 digit).:").strip()
@@ -63,8 +99,11 @@ class Bank:
         
       # Account Number Generation
       while True:
-        self.account_no = random.randint(1000000000,9999999999) 
-        if not self.account_exists(self.account_no) :
+        self.account_no = random.randint(1000000000,9999999999)
+        self.code = f"{self.branch_number : 06d}" 
+        self.branch_number += 1
+        self.ifsc = f"{self.bank_code}0{self.code}" 
+        if not self.account_exists(self.account_no) and not self.ifsc_exists(self.ifsc):
           break
       print("Account is sucessfull Created Account No.:",self.account_no) 
 
@@ -81,7 +120,7 @@ class Bank:
 
       # 7. Write to CSV file
       file_exists = os.path.exists(self.FILE)
-      fieldnames = ["Name","Phone","Age","Gender","Aadhar","Account_no","Balance"]
+      fieldnames = ["Name","Phone","Age","Gender","Country","State","Aadhar","Account_no","Ifsc_number","Balance"]
 
       with open(self.FILE, "a",newline="",encoding="utf-8") as file:
        
@@ -93,8 +132,11 @@ class Bank:
                 "Phone": self.phone, 
                 "Age": self.age, 
                 "Gender": self.gender,
+                "Country": matches_c[0],
+                "State" : matches[0],
                 "Aadhar": self.aadhar_no, 
-                "Account_no": self.account_no, 
+                "Account_no": self.account_no,
+                "Ifsc_number" : self.ifsc, 
                 "Balance": self.balance
             })
        
@@ -105,8 +147,11 @@ class Bank:
       print("Phone       :",self.phone)
       print("Age         :",self.age)
       print("Gender      :",self.gender)
+      print("Country     :",matches_c[0])
+      print("State       :",matches[0])
       print("Aadhar No.  :",self.aadhar_no)
       print("Account no. :",self.account_no)
+      print("Ifsc_number :",self.ifsc)
       print("Balance     :",self.balance)
       break
 
@@ -131,15 +176,26 @@ class Bank:
         if row["Account_no"] == str(account_no).strip():
             return True
     return False
+
+  def ifsc_exists(self,ifsc_number):
+      if not os.path.exists(self.FILE):
+        return False
+      
+      with open(self.FILE,"r",newline="",encoding="utf-8") as file:
+        reader =csv.DictReader(file)
+        for row in reader:
+          if row["Ifsc_number"] == str(ifsc_number).strip():
+              return True
+      return False
   
-  def find_account(self,account_no):
+  def find_account(self,account_no, ifsc_number):
       if not os.path.exists(self.FILE):
          return None
 
       with open(self.FILE,"r",newline="",encoding="utf-8") as file:
         reader =csv.DictReader(file)
         for row in reader:
-          if row["Account_no"] == str(account_no).strip():
+          if row["Account_no"] == str(account_no).strip() and row["Ifsc_number"] == str(ifsc_number ).strip():
               return row
       return None
 
@@ -169,9 +225,6 @@ class Bank:
           "Balance": balance
       })  
 
-   # Displays reading data back to the user
-  # def transaction_history(self):
-  #   transaction_history()
     
   # Balance update in csv file
   def update_balance(self,account_no,new_balance):
@@ -185,7 +238,7 @@ class Bank:
         if row["Account_no"] == str(account_no).strip():
           row["Balance"] = str(new_balance)
         accounts.append(row)
-    fieldnames = ["Name","Phone","Age","Gender","Aadhar","Account_no","Balance"]    
+    fieldnames = ["Name","Phone","Age","Gender","Country","State","Aadhar","Account_no","Ifsc_number","Balance"]    
 
     with open(self.FILE,"w",newline="",encoding="utf-8") as file:
       writer = csv.DictWriter(file,fieldnames=fieldnames)
