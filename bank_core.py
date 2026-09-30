@@ -5,7 +5,11 @@ from withdraw_money import withdraw_money
 from account_info import account_info
 from transaction_history import transaction_history
 from money_transfer import money_transfer
+from employee import employee_login
+
 class Core:
+  def login_employee(self):
+     employee_login.login_employee()
   def balance_check(self):
     balance = balance_check()
     
