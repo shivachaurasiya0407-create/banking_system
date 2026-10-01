@@ -28,7 +28,7 @@ def login_employee():
 
         if matched_row is None:
             
-            print("Invalid credentials. Try Again !")
+            print("Invalid credentials. Try Again ")
             continue
 
         if matched_row.get("Password_Changed", "").strip().upper() != "YES":
