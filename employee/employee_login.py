@@ -1,8 +1,12 @@
 import csv
 import hashlib
-import os
+import datetime
 
 file_path = "employee.csv"
+FIELDNAMES = [
+    "ID", "Name", "Phone", "Username", "Password", "First_Login",
+    "Password_Changed", "Login_success", "Login_Time", "login_attempts",
+]
 
 def login_employee():
     print("-------- Login --------")
@@ -11,42 +15,51 @@ def login_employee():
         employee_password = input("Password : ").strip()
         hashed_password = hashlib.sha256(employee_password.encode()).hexdigest()
 
-        all_employees = []
-        user_found = False
-        password_changed = False
-
-
         with open(file_path, "r", newline="", encoding="utf-8") as file:
             reader = csv.DictReader(file)
-            for row in reader:
-                if row.get("Username") == employee_username and row.get("Password") == hashed_password:
-                    user_found = True
-                    print("\nFirst Login / Password Change Required!")
-                    new_password = input("Enter New Password : ").strip()
-                    hashed_new_password = hashlib.sha256(new_password.encode()).hexdigest()
-                    
-                    row["Password"] = hashed_new_password
-                    password_changed = True
-                    print("Password updated successfully! Please login again with your new password.")
+            employees = list(reader)
 
-                all_employees.append(row)
+        matched_row = next(
+            (row for row in employees
+             if row.get("Username", "").upper() == employee_username
+             and row.get("Password") == hashed_password),
+            None,
+        )
 
-        if password_changed:            
-            fieldnames =["ID","Name","Phone","Username","Password"]
-            with open(file_path, "w", newline="", encoding="utf-8") as file:
-                writer = csv.DictWriter(file, fieldnames=fieldnames)
-                writer.writeheader()
-                writer.writerow(row)      
-            return "CHANGED"
+        if matched_row is None:
+            
+            print("Invalid credentials. Try Again !")
+            continue
 
-        if not user_found and os.path.exists(file_path):
-            with open(file_path, "r", newline="", encoding="utf-8") as file:
-                reader = csv.DictReader(file)
-                for row in reader:
-                    if row.get("Username") == employee_username and row.get("Password") == hashed_password:
-                        print("\nLogin Successful!")
-                        return "SUCCESS"
+        if matched_row.get("Password_Changed", "").strip().upper() != "YES":
+            print("\nFirst Login / Password Change Required!")
+            new_password = input("Enter New Password : ").strip()
+            if not new_password:
+                print("Password cannot be empty.")
+                continue
 
-        print("Invalid credentials. Try Again !")
-        return "FAILED"
+            matched_row["Password"] = hashlib.sha256(new_password.encode()).hexdigest()
+            matched_row["First_Login"] = "Yes"
+            matched_row["Password_Changed"] = "YES"
+            matched_row["Login_success"] = "NO"
+            matched_row["Login_Time"] = "NOT_LOGGED_IN"
+            matched_row["login_attempts"] = "0"
+            print("Password updated successfully! Please login again with your new password.")
+            result = "CHANGED"
+        else:
+            print("\nLogin Successful!")
+            matched_row["Login_success"] = "YES"
+            matched_row["Login_Time"] = datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+            matched_row["login_attempts"] = "0"
+            result = "SUCCESS"
+
+        employees = [
+            {fieldname: row.get(fieldname, "") for fieldname in FIELDNAMES}
+            for row in employees
+        ]
+        with open(file_path, "w", newline="", encoding="utf-8") as file:
+            writer = csv.DictWriter(file, fieldnames=FIELDNAMES)
+            writer.writeheader()
+            writer.writerows(employees)
+        return result
        

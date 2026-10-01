@@ -1,6 +1,6 @@
 from bank_system import Bank
 from bank_core import Core
-import sys
+# import sys
 
 file_path = "employee.csv"
 
@@ -10,14 +10,13 @@ def main():
     bank_obj = Bank()
     core = Core()
     while True:
-        # Note: Maan lete hain core.login_employee() aapke login_employee() ko call karta hai
-        # Aur wahan se "CHANGED", "SUCCESS", ya "FAILED" return hota hai.
+    
         login_status = core.login_employee() 
-        
+
         if login_status == "SUCCESS":
-            break  # Login successful, loop se bahar aao aur services menu pr jao
+            break  
         elif login_status == "CHANGED":
-            continue  # Password change ho gaya, wapas login page pr bhejo
+            continue 
         else:
             choice = input("Do you want to try again? (y/n) : ").lower().strip()
             if choice != 'y':

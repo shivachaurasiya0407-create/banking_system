@@ -9,7 +9,7 @@ from employee import employee_login
 
 class Core:
   def login_employee(self):
-     employee_login.login_employee()
+    return employee_login.login_employee()
   def balance_check(self):
     balance = balance_check()
     
