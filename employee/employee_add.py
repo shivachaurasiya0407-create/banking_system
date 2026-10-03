@@ -35,25 +35,29 @@ def add_employee():
     password = hashed_password
 
     file_exists = os.path.exists("employee.csv")
-    fieldnames = ["ID","Name","Phone","Username","Password","Employee_Type","First_Login","Password_Changed","Login_success","Login_Time","login_attempts"]
+    FIELDNAMES = ["ID","Employee_type", "Name", "Phone", "Username", "Password", "First_Login","Password_Changed", "Login_success", "Login_Time", "login_attempts","logout","logout_time"
+]
+
     with open (file_path,"a",newline="",encoding="utf-8") as file :
-       writer = csv.DictWriter(file,fieldnames=fieldnames)
+       writer = csv.DictWriter(file,fieldnames=FIELDNAMES)
        if not file_exists or os.path.getsize("employee.csv") == 0:
            writer.writeheader()
        writer.writerow({
            "ID" : id,
+           "Employee_type" : emp_type,
            "Name" : name,
            "Phone" : phone,
            "Username" : username,
            "Password" : password,
-           "Employee_Type" : emp_type,
            "First_Login" : "No",
            "Password_Changed" : "NO",
            "Login_success" : "NO",
            "Login_Time" : "NOT_LOGGED_IN",
-           "login_attempts" : 0
+           "login_attempts" : 0,
+           "logout" : "NO",
+           "logout_time" : "NOT_LOGGED_OUT"
         })    
-x = input("Do you want to add employee (y/n) : ").lower()
-if "y":
-   add = add_employee()
+# x = input("Do you want to add employee (y/n) : ").lower()
+# if "y":
+#    add = add_employee()
 

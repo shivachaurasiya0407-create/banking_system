@@ -1,2 +1,2 @@
-ID,Name,Phone,Username,Password,First_Login,Password_Changed,Login_success,Login_Time,login_attempts
-1068,SHIVA,9876543210,SHIVA1068,eba6fd0e1aec9c8bda8e4b8f7e4e540bf0bdd03a1e95217a2f096ac66a7fa1ae,Yes,YES,YES,2026-10-01 09:52:18,0
+ID,Employee_type,Name,Phone,Username,Password,First_Login,Password_Changed,Login_success,Login_Time,login_attempts,logout,logout_time
+9201,ADMIN,SHIVA C,9876543210,SHIVA C9201,b7964cd286b696b94af060a02039c460fda616f99231b5027b725fd72ca0d969,Yes,YES,YES,2026-10-03 10:44:40,0,NO,NOT_LOGGED_OUT
