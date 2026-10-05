@@ -4,7 +4,7 @@ from bank_core import Core
 import datetime
 
 FIELDNAMES = [
-    "ID", "Name", "Phone", "Username", "Password", "First_Login",
+    "ID", "Employee_type", "Name", "Last_Name", "Phone", "Username", "Password", "First_Login",
     "Password_Changed", "Login_success", "Login_Time", "login_attempts","logout","logout_time"
 ]
 logout = "No"
@@ -13,24 +13,6 @@ bank_obj = Bank()
 core = Core()
 def employee_main():
     
-    # bank_obj = Bank()
-    # core = Core()
-    # while True:
-    
-    #     login_status = core.login_employee() 
-
-    #     if login_status == "SUCCESS":
-    #         break  
-    #     elif login_status == "CHANGED":
-    #         continue 
-    #     else:
-    #         choice = input("Do you want to try again? (y/n) : ").lower().strip()
-    #         if choice != 'y':
-    #             print("Exiting system...")
-    #             return
-    
-
-
     menu = """------ Our Services ------
     1.Account Open
     2.Check Balance
@@ -120,14 +102,14 @@ def admin_main():
         "6": core.transaction_history,
         "transaction history": core.transaction_history,
         "7": core.money_transfer,
-        "8": core.add_employee,
-        "add employee": core.add_employee,
+        "8": core.employee_add,
+        "add employee": core.employee_add,
         # "9": core.remove_employee,
         # "remove employee": core.remove_employee,
         # "10": core.change_password,
         # "change password": core.change_password,
-        # "11": core.freeze_account,
-        # "freeze account": core.freeze_account,
+        "11": core.freeze_account,
+        "freeze account": core.freeze_account,
         # "fund transfer": core.money_transfer,
     }
 
@@ -169,10 +151,11 @@ while True:
 
     if login_result.status == "SUCCESS" and login_result.employee_type == "ADMIN":
         admin_main()
-        break
+        # break
+        continue
     elif login_result.status == "SUCCESS" and login_result.employee_type == "EMPLOYEE":
         employee_main()
-        break
+        continue
     elif login_result.status == "CHANGED":
         continue
     else:

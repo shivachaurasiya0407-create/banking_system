@@ -6,10 +6,13 @@ from account_info import account_info
 from transaction_history import transaction_history
 from money_transfer import money_transfer
 from employee import employee_login
+from employee import employee_add
+from account_freeze import freeze_account
 
 class Core:
   def login_employee(self):
     return employee_login.login_employee()
+
   def balance_check(self):
     balance = balance_check()
     
@@ -31,4 +34,10 @@ class Core:
 
   def transaction_history(self):
     transaction_history() 
-  
+
+  def employee_add(self):
+    employee_add.add_employee()
+
+  def freeze_account(self):
+    freeze_account()
+    

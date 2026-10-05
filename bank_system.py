@@ -20,12 +20,14 @@ class Bank:
       while True:
         print("\n--- Account Opening ---")
         self.name = str(input("Enter Name :")).upper()
-        for i in self.name:
+        self.last_name = str(input("Enter Name :")).upper()
+
+        for i in self.name and self.last_name:
           if not i.isalpha() and i != " ":
             print("Special character found :",i)
             break
         else:
-          print("Valid Name")
+          # print("Valid Name")
           break  
       
        # Phone Number input  
@@ -120,7 +122,7 @@ class Bank:
 
       # 7. Write to CSV file
       file_exists = os.path.exists(self.FILE)
-      fieldnames = ["Name","Phone","Age","Gender","Country","State","Aadhar","Account_no","Ifsc_number","Balance"]
+      fieldnames = ["Name","Last_Name","Phone","Age","Gender","Country","State","Aadhar","Account_no","Ifsc_number","Balance"]
 
       with open(self.FILE, "a",newline="",encoding="utf-8") as file:
        
@@ -129,6 +131,7 @@ class Bank:
           writer.writeheader()
        writer.writerow({
                 "Name": self.name, 
+                "Last_Name": self.last_name,
                 "Phone": self.phone, 
                 "Age": self.age, 
                 "Gender": self.gender,
@@ -144,6 +147,7 @@ class Bank:
 
       print("\n Account Details :")
       print("Name        :",self.name)
+      print("Last Name   :",self.last_name)
       print("Phone       :",self.phone)
       print("Age         :",self.age)
       print("Gender      :",self.gender)
@@ -238,7 +242,7 @@ class Bank:
         if row["Account_no"] == str(account_no).strip():
           row["Balance"] = str(new_balance)
         accounts.append(row)
-    fieldnames = ["Name","Phone","Age","Gender","Country","State","Aadhar","Account_no","Ifsc_number","Balance"]    
+    fieldnames = ["Name","Last_Name","Phone","Age","Gender","Country","State","Aadhar","Account_no","Ifsc_number","Balance"]    
 
     with open(self.FILE,"w",newline="",encoding="utf-8") as file:
       writer = csv.DictWriter(file,fieldnames=fieldnames)

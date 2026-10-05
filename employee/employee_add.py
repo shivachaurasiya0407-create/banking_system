@@ -3,7 +3,6 @@ import os
 import string
 import secrets
 import hashlib
-# FILE = "employee.csv"
 file_path ="employee.csv"
 def add_employee():
 
@@ -13,7 +12,8 @@ def add_employee():
         print("Invalid employee type. Please enter 'Admin' or 'Employee'.")
         return
     name = str(input("Name : ")).upper()
-    for i in name:
+    last_name = str(input("Last Name : ")).upper()
+    for i in name and last_name:
       if not i.isalpha() and i != " ":
         print("Invalid name. Please enter a valid name.")
         return
@@ -26,7 +26,6 @@ def add_employee():
     
     char =string.ascii_letters +string.digits + string.punctuation
     password = ''.join(secrets.choice(char) for _ in range(12) )
-    
     username = name + str(id)
     print("Your username :",username)
     print("Your password :",password)
@@ -35,8 +34,7 @@ def add_employee():
     password = hashed_password
 
     file_exists = os.path.exists("employee.csv")
-    FIELDNAMES = ["ID","Employee_type", "Name", "Phone", "Username", "Password", "First_Login","Password_Changed", "Login_success", "Login_Time", "login_attempts","logout","logout_time"
-]
+    FIELDNAMES = ["ID","Employee_type", "Name","Last_Name", "Phone", "Username", "Password", "First_Login","Password_Changed", "Login_success", "Login_Time", "login_attempts","logout","logout_time"]
 
     with open (file_path,"a",newline="",encoding="utf-8") as file :
        writer = csv.DictWriter(file,fieldnames=FIELDNAMES)
@@ -46,6 +44,7 @@ def add_employee():
            "ID" : id,
            "Employee_type" : emp_type,
            "Name" : name,
+           "Last_Name" : last_name,
            "Phone" : phone,
            "Username" : username,
            "Password" : password,
@@ -57,7 +56,5 @@ def add_employee():
            "logout" : "NO",
            "logout_time" : "NOT_LOGGED_OUT"
         })    
-# x = input("Do you want to add employee (y/n) : ").lower()
-# if "y":
-#    add = add_employee()
-
+# x = add_employee()
+# print(x)       
