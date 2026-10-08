@@ -4,6 +4,7 @@ import { useMemo, useState } from "react"
 import { Activity, ArrowDownLeft, ArrowUpRight, BarChart3, Bell, ChevronDown, CircleDollarSign, CreditCard, FilePlus2, LayoutDashboard, Menu, MoreHorizontal, Plus, Search, Settings, ShieldCheck, UserRound, Users, WalletCards, X } from "lucide-react"
 
 type Account = { name: string; initials: string; account: string; type: string; balance: string; status: "Active" | "Pending" | "Frozen" }
+type Transaction = { label: string; meta: string; amount: string; kind: "credit" | "debit" }
 
 const accounts: Account[] = [
   { name: "Aditya Raj", initials: "AR", account: "•••• 5538", type: "Savings Account", balance: "₹90,000.00", status: "Active" },
@@ -12,7 +13,7 @@ const accounts: Account[] = [
   { name: "Rohan Mehta", initials: "RM", account: "•••• 7741", type: "Business Account", balance: "₹4,50,000.00", status: "Pending" },
 ]
 
-const transactions = [
+const transactions: Transaction[] = [
   { label: "Salary credit · Aditya Raj", meta: "Today, 10:42 AM", amount: "+ ₹45,000", kind: "credit" },
   { label: "NEFT transfer · Shiv Chaurasiya", meta: "Today, 09:18 AM", amount: "− ₹8,500", kind: "debit" },
   { label: "Cash deposit · Meera Nair", meta: "Yesterday, 04:32 PM", amount: "+ ₹22,000", kind: "credit" },
@@ -27,7 +28,7 @@ export default function Home() {
   const [showNewAccount, setShowNewAccount] = useState(false)
   const [toast, setToast] = useState("")
   const [accountRows, setAccountRows] = useState(accounts)
-  const [transactionRows, setTransactionRows] = useState(transactions)
+  const [transactionRows, setTransactionRows] = useState<Transaction[]>(transactions)
   const filteredAccounts = useMemo(() => accountRows.filter((account) => `${account.name} ${account.account} ${account.type}`.toLowerCase().includes(query.toLowerCase())), [accountRows, query])
   const filteredTransactions = useMemo(() => transactionRows.filter((transaction) => `${transaction.label} ${transaction.meta} ${transaction.amount}`.toLowerCase().includes(query.toLowerCase())), [transactionRows, query])
 
@@ -60,7 +61,7 @@ export default function Home() {
 function Metric({ icon: Icon, label, value, note }: { icon: typeof WalletCards; label: string; value: string; note: string }) { return <article className="metric-card"><div className="metric-top"><span>{label}</span><div className="metric-icon"><Icon size={16} /></div></div><div className="metric-value">{value}</div><div className="metric-note"><span className="positive">↗ </span>{note}</div></article> }
 function ActivityItem({ text, time }: { text: React.ReactNode; time: string }) { return <div className="activity"><div className="activity-dot" /><div className="activity-copy"><div>{text}</div><div className="activity-time">{time}</div></div></div> }
 
-function TransactionsWorkspace({ transactions, onAction, onAdd }: { transactions: typeof transactions; onAction: (message: string) => void; onAdd: (transaction: (typeof transactions)[number]) => void }) {
+function TransactionsWorkspace({ transactions, onAction, onAdd }: { transactions: Transaction[]; onAction: (message: string) => void; onAdd: (transaction: Transaction) => void }) {
   const [showForm, setShowForm] = useState(false)
   const [label, setLabel] = useState("")
   const [amount, setAmount] = useState("")
