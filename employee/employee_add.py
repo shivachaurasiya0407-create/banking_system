@@ -59,5 +59,35 @@ def add_employee():
            "logout" : "NO",
            "logout_time" : "NOT_LOGGED_OUT"
         })    
-# x = add_employee()
-# print(x)       
+
+
+def employee_remove():
+    print("-------- Remove Employee --------")
+    emp_id = input("Enter Employee ID to remove: ").strip()
+    if not emp_id.isdigit():
+        print("Invalid ID. Please enter a valid numeric ID.")
+        return
+
+    emp_id = int(emp_id)
+    file_path = "employee.csv"
+    updated_rows = []
+    employee_found = False
+
+    with open(file_path, "r", newline="", encoding="utf-8") as file:
+        reader = csv.DictReader(file)
+        for row in reader:
+            if int(row["ID"]) == emp_id:
+                employee_found = True
+                continue  # Skip the row to be removed
+            updated_rows.append(row)
+
+    if not employee_found:
+        print(f"No employee found with ID {emp_id}.")
+        return
+
+    with open(file_path, "w", newline="", encoding="utf-8") as file:
+        writer = csv.DictWriter(file, fieldnames=reader.fieldnames)
+        writer.writeheader()
+        writer.writerows(updated_rows)
+
+    print(f"Employee with ID {emp_id} has been removed successfully.")

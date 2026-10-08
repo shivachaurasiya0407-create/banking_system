@@ -82,10 +82,10 @@ def admin_main():
     5.Account info
     6.Transaction History
     7.Money Transfer
-    8.Add Employee
-    9.Remove Employee/View Employee
+    8.Add Employee / Remove Employee
+    9.View Employee
     10.Change Password
-    11.Frezz Account or Employee
+    11.Freeze Account/Unfreeze Account
     12.Logout """
 
     services = {
@@ -102,15 +102,13 @@ def admin_main():
         "6": core.transaction_history,
         "transaction history": core.transaction_history,
         "7": core.money_transfer,
-        "8": core.employee_add,
-        "add employee": core.employee_add,
-        # "9": core.remove_employee,
-        # "remove employee": core.remove_employee,
+        "8": core.employee_add_remove,
+        "add employee": core.employee_add_remove,
         # "10": core.change_password,
         # "change password": core.change_password,
-        "11": core.freeze_account,
-        "freeze account": core.freeze_account,
-        # "fund transfer": core.money_transfer,
+        "11": core.freeze_unfreeze_account,
+        "freeze/unfreeze account": core.freeze_unfreeze_account,
+        
     }
 
     while True:

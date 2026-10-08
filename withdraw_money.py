@@ -19,9 +19,9 @@ def withdraw_money():
      print("Enter Amount in digit")
      return    
 
- account =bank.find_account(account_no, ifsc_number)
+ account =bank.find_account(account_no, ifsc_number,status="Active")
  if account is None:
-    print("Invalid Account Number or IFSC Number")
+    print("Invalid Account Number or IFSC Number or Account is not Active")
     return
  current_balance = float(account["Balance"])
  if amount > current_balance:

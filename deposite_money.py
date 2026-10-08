@@ -24,7 +24,7 @@ def deposite_money():
      return
  account = bank.find_account(account_no, ifsc_number,status="Active")
  if account is None:
-     print("Account Not Find")
+     print("Account Not Found or account not active")
      return
  new_balance = float(account["Balance"]) + amount
  bank.update_balance(account_no,new_balance)

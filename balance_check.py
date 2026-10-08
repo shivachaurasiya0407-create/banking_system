@@ -11,7 +11,7 @@ def balance_check():
     print("Invalid Account Number")
     return
  account_no = int(account_no)
- account = bank.find_account(account_no, ifsc_number)
+ account = bank.find_account(account_no, ifsc_number,status = "Active")
  if account is None:
     print("Invalid Account Number and IFSC Number")
     return
@@ -20,5 +20,6 @@ def balance_check():
  print("Account No.:",account["Account_no"])
  print("Balance    :",account["Balance"])
  print("Ifsc Number:",account["Ifsc_number"])
+ print("Status     :",account["Status"])
 
 
