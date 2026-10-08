@@ -122,7 +122,7 @@ class Bank:
 
       # 7. Write to CSV file
       file_exists = os.path.exists(self.FILE)
-      fieldnames = ["Name","Last_Name","Phone","Age","Gender","Country","State","Aadhar","Account_no","Ifsc_number","Balance"]
+      fieldnames = ["Name","Last_Name","Phone","Age","Gender","Country","State","Aadhar","Account_no","Ifsc_number","Balance","Status"]
 
       with open(self.FILE, "a",newline="",encoding="utf-8") as file:
        
@@ -140,7 +140,8 @@ class Bank:
                 "Aadhar": self.aadhar_no, 
                 "Account_no": self.account_no,
                 "Ifsc_number" : self.ifsc, 
-                "Balance": self.balance
+                "Balance": self.balance,
+                "Status": "Active"
             })
        
       self.log_transaction(self.account_no, "Deposit", amount,0, self.balance)
@@ -192,14 +193,14 @@ class Bank:
               return True
       return False
   
-  def find_account(self,account_no, ifsc_number):
+  def find_account(self,account_no, ifsc_number,status=None):
       if not os.path.exists(self.FILE):
          return None
 
       with open(self.FILE,"r",newline="",encoding="utf-8") as file:
         reader =csv.DictReader(file)
         for row in reader:
-          if row["Account_no"] == str(account_no).strip() and row["Ifsc_number"] == str(ifsc_number ).strip():
+          if row["Account_no"] == str(account_no).strip() and row["Ifsc_number"] == str(ifsc_number ).strip() and (status is None or row["Status"].strip() == status):             
               return row
       return None
 
@@ -242,7 +243,7 @@ class Bank:
         if row["Account_no"] == str(account_no).strip():
           row["Balance"] = str(new_balance)
         accounts.append(row)
-    fieldnames = ["Name","Last_Name","Phone","Age","Gender","Country","State","Aadhar","Account_no","Ifsc_number","Balance"]    
+    fieldnames = ["Name","Last_Name","Phone","Age","Gender","Country","State","Aadhar","Account_no","Ifsc_number","Balance","Status"]    
 
     with open(self.FILE,"w",newline="",encoding="utf-8") as file:
       writer = csv.DictWriter(file,fieldnames=fieldnames)

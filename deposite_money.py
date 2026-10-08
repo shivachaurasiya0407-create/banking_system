@@ -22,7 +22,7 @@ def deposite_money():
  except ValueError: 
      print("Enter Amount is Digit") 
      return
- account = bank.find_account(account_no, ifsc_number)
+ account = bank.find_account(account_no, ifsc_number,status="Active")
  if account is None:
      print("Account Not Find")
      return

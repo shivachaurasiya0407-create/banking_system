@@ -5,9 +5,8 @@ from dataclasses import dataclass
 
 file_path = "employee.csv"
 FIELDNAMES = [
-    "ID", "Employee_type","Name", "Phone", "Username", "Password", "First_Login",
-    "Password_Changed", "Login_success", "Login_Time", "login_attempts","logout","logout_time"
-]
+    "ID", "Employee_type","Name","Last_Name", "Phone", "Username", "Password", "First_Login",
+    "Password_Changed", "Login_success", "Login_Time", "login_attempts","logout","logout_time"]
 
 @dataclass
 class LoginResult:

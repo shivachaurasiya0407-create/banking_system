@@ -16,6 +16,7 @@ def account_info():
     return
  print("\n Account Details :")
  print("Name        :",account["Name"])
+ print("Last_Name   :",account["Last_Name"])
  print("Phone       :",account["Phone"])
  print("Age         :",account["Age"])
  print("Gender      :",account["Gender"])
@@ -25,3 +26,4 @@ def account_info():
  print("Account no. :",account["Account_no"])
  print("Ifsc Number :",account["Ifsc_number"])
  print("Balance     :",account["Balance"])
+ print("Status      :",account["Status"])

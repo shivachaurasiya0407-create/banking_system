@@ -4,13 +4,13 @@ from bank_core import Core
 import datetime
 
 FIELDNAMES = [
-    "ID", "Employee_type", "Name", "Last_Name", "Phone", "Username", "Password", "First_Login",
-    "Password_Changed", "Login_success", "Login_Time", "login_attempts","logout","logout_time"
-]
+    "ID", "Employee_type","Name","Last_name", "Phone", "Username", "Password", "First_Login",
+    "Password_Changed", "Login_success", "Login_Time", "login_attempts","logout","logout_time"]
 logout = "No"
 
 bank_obj = Bank()
 core = Core()
+
 def employee_main():
     
     menu = """------ Our Services ------
@@ -47,7 +47,7 @@ def employee_main():
         print(menu)
         service = input("Enter Service : ").strip().lower()
 
-        if service in ("8", "exit"):
+        if service in ("8", "logout"):
             with open("employee.csv", "r", newline="", encoding="utf-8") as file:
                 reader = csv.DictReader(file)
                 employees = list(reader)
@@ -56,7 +56,7 @@ def employee_main():
                     row["Login_success"] = "NO"
                     row["logout_time"] = datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S")
                     break
-            row["logout"] = "Yes"
+                row["logout"] = "Yes"
             with open("employee.csv", "w", newline="", encoding="utf-8") as file:
                 writer = csv.DictWriter(file, fieldnames=FIELDNAMES)
                 writer.writeheader()
@@ -120,7 +120,7 @@ def admin_main():
         print(menu)
         service = input("Enter Service : ").strip().lower()
 
-        if service in ("12", "Logout"):
+        if service in ("12", "logout"):
             with open("employee.csv", "r", newline="", encoding="utf-8") as file:
                 reader = csv.DictReader(file)
                 employees = list(reader)
@@ -129,7 +129,7 @@ def admin_main():
                     row["Login_success"] = "NO"
                     row["logout_time"] = datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S")
                     break
-            row["logout"] = "Yes"
+                row["logout"] = "Yes"
             with open("employee.csv", "w", newline="", encoding="utf-8") as file:
                 writer = csv.DictWriter(file, fieldnames=FIELDNAMES)
                 writer.writeheader()

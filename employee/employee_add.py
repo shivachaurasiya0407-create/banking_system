@@ -34,7 +34,10 @@ def add_employee():
     password = hashed_password
 
     file_exists = os.path.exists("employee.csv")
-    FIELDNAMES = ["ID","Employee_type", "Name","Last_Name", "Phone", "Username", "Password", "First_Login","Password_Changed", "Login_success", "Login_Time", "login_attempts","logout","logout_time"]
+    
+    FIELDNAMES = [
+    "ID", "Employee_type","Name","Last_Name", "Phone", "Username", "Password", "First_Login",
+    "Password_Changed", "Login_success", "Login_Time", "login_attempts","logout","logout_time"]
 
     with open (file_path,"a",newline="",encoding="utf-8") as file :
        writer = csv.DictWriter(file,fieldnames=FIELDNAMES)
