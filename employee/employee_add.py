@@ -15,7 +15,7 @@ def add_employee():
     last_name = str(input("Last Name : ")).upper()
     for i in name and last_name:
       if not i.isalpha() and i != " ":
-        print("Invalid name. Please enter a valid name.")
+        print("Invalid name. Please Enter a valid name.")
         return
     phone = int(input("Phone : "))
     if not str(phone).isdigit() or len(str(phone)) != 10:
