@@ -1,33 +1,22 @@
 from bank_system import Bank
 
+
 def deposite_money():
- bank = Bank()
-
- print("--- Deposite Money ---") 
- account_no =input("Enter Account No.: ").strip()
- ifsc_number = input("Enter IFSC Number: ").strip()
- if not account_no.isdigit():
-     print("Invalid Account Number")
-     exit()
- account_no = int(account_no)
- if not ifsc_number:
-     print("Invalid IFSC Number")
-     return
-
- try:      
-     amount = int(input("Enter Deposite amount :"))
-     if amount <= 0  :
-         print("Invalid amount")
-         return
- except ValueError: 
-     print("Enter Amount is Digit") 
-     return
- account = bank.find_account(account_no, ifsc_number,status="Active")
- if account is None:
-     print("Account Not Found or account not active")
-     return
- new_balance = float(account["Balance"]) + amount
- bank.update_balance(account_no,new_balance)
- bank.log_transaction(account_no, " Case Deposit", amount,0, new_balance)
- print("Deposited       :",amount)
- print("Current Balance :",new_balance) 
+    bank = Bank()
+    print("--- Deposit Money ---")
+    account_no = input("Enter account number: ").strip()
+    if len(account_no) != 10 or not account_no.isdigit():
+        print("Enter a valid 10-digit account number.")
+        return
+    ifsc_number = input("Enter IFSC number: ").strip()
+    if not ifsc_number:
+        print("IFSC number is required.")
+        return
+    amount = input("Enter deposit amount (Rs.): ").strip()
+    try:
+        new_balance = bank.deposit(account_no, ifsc_number, amount)
+    except ValueError as error:
+        print(error)
+        return
+    print(f"Deposited: Rs. {amount}")
+    print(f"Current balance: Rs. {new_balance:.2f}")

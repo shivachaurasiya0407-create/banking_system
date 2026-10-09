@@ -1,57 +1,57 @@
-from bank_system import Bank
+from account_freeze import freeze_account, unfreeze_account
+from account_info import account_info
 from balance_check import balance_check
 from deposite_money import deposite_money
-from withdraw_money import withdraw_money
-from account_info import account_info
-from transaction_history import transaction_history
+from employee import employee_add, employee_login
 from money_transfer import money_transfer
-from employee import employee_login
-from employee import employee_add
-from account_freeze import freeze_account,unfreeze_account
+from transaction_history import transaction_history
+from withdraw_money import withdraw_money
+
 
 class Core:
-  def login_employee(self):
-    return employee_login.login_employee()
+    def login_employee(self):
+        return employee_login.login_employee()
 
-  def balance_check(self):
-    balance = balance_check()
-    
-#   Deposite money
-  def deposite_money(self):
-   deposite_money()
+    def balance_check(self):
+        balance_check()
 
-  # Withdraw money
-  def withdraw_money(self):
-    withdraw_money()
-    
-  # account info
-  def account_info(self):
-   account_info()
+    def deposite_money(self):
+        deposite_money()
 
-    # money transfer 
-  def money_transfer(self):
-   money_transfer()
+    def withdraw_money(self):
+        withdraw_money()
 
-  def transaction_history(self):
-    transaction_history() 
+    def account_info(self):
+        account_info()
 
-  def employee_add_remove(self):
-    # employee_add.add_employee()
-    print(" ======= Add Employee / Remove Employee =======")
-    action = input("Enter 'add' to add an employee or 'remove' to remove an employee: ").strip().lower()
-    if action == "add":
-        employee_add.add_employee()
-    elif action == "remove":
-        employee_add.employee_remove()
+    def money_transfer(self):
+        money_transfer()
 
-  def freeze_unfreeze_account(self):
-    print(" ======= Freeze/Unfreeze Account =======")
-    action = input("Enter 'freeze' to freeze an account or 'unfreeze' to unfreeze an account: ").strip().lower()                    
-    if action == "freeze":
-      freeze_account()
+    def transaction_history(self):
+        transaction_history()
 
-    if action == "unfreeze":
-      unfreeze_account()
+    def employee_add_remove(self):
+        print("======= Add Employee / Remove Employee =======")
+        action = input("Enter 'add' or 'remove': ").strip().lower()
+        if action == "add":
+            employee_add.add_employee()
+        elif action == "remove":
+            employee_add.employee_remove()
+        else:
+            print("Invalid employee action.")
 
-    # freeze_account()
-    
+    def view_employees(self):
+        employee_add.view_employees()
+
+    def change_employee_password(self):
+        employee_add.change_employee_password()
+
+    def freeze_unfreeze_account(self):
+        print("======= Freeze / Unfreeze Account =======")
+        action = input("Enter 'freeze' or 'unfreeze': ").strip().lower()
+        if action == "freeze":
+            freeze_account()
+        elif action == "unfreeze":
+            unfreeze_account()
+        else:
+            print("Invalid account action.")

@@ -1,251 +1,462 @@
-import random 
-from difflib import get_close_matches
 import csv
 import os
-from datetime import datetime
+import secrets
+import tempfile
 import uuid
-class Bank: 
-  FILE ="Accounts.csv"   # File name
-  bank_code = "SHIV"  
+from datetime import datetime
+from decimal import Decimal, InvalidOperation
+from pathlib import Path
 
-  def __init__(self): 
-    self.balance = 0
-    self.branch_number = 1
-      
-  def create_account(self):   
-    if not os.path.exists("Transaction_history"):
-      os.makedirs("Transaction_history")
 
-    while True: 
-      while True:
+ACCOUNT_FIELDS = [
+    "Name",
+    "Last_Name",
+    "Phone",
+    "Age",
+    "Gender",
+    "Country",
+    "State",
+    "Aadhar",
+    "Account_no",
+    "Ifsc_number",
+    "Balance",
+    "Status",
+]
+TRANSACTION_FIELDS = [
+    "Transaction_Id",
+    "Account_No",
+    "Ifsc_Number",
+    "Date",
+    "Time",
+    "Transaction_Type",
+    "CR",
+    "DR",
+    "Balance",
+    "Counterparty_Account",
+]
+MIN_OPENING_BALANCE = Decimal("2000.00")
+PROJECT_DIR = Path(__file__).resolve().parent
+INDIA_STATES = (
+    "Andaman and Nicobar Islands",
+    "Andhra Pradesh",
+    "Arunachal Pradesh",
+    "Assam",
+    "Bihar",
+    "Chandigarh",
+    "Chhattisgarh",
+    "Dadra and Nagar Haveli and Daman and Diu",
+    "Delhi",
+    "Goa",
+    "Gujarat",
+    "Haryana",
+    "Himachal Pradesh",
+    "Jammu and Kashmir",
+    "Jharkhand",
+    "Karnataka",
+    "Kerala",
+    "Ladakh",
+    "Lakshadweep",
+    "Madhya Pradesh",
+    "Maharashtra",
+    "Manipur",
+    "Meghalaya",
+    "Mizoram",
+    "Nagaland",
+    "Odisha",
+    "Puducherry",
+    "Punjab",
+    "Rajasthan",
+    "Sikkim",
+    "Tamil Nadu",
+    "Telangana",
+    "Tripura",
+    "Uttar Pradesh",
+    "Uttarakhand",
+    "West Bengal",
+)
+
+
+def _atomic_write_csv(file_path, fieldnames, rows):
+    path = Path(file_path)
+    path.parent.mkdir(parents=True, exist_ok=True)
+    temporary_path = None
+    try:
+        with tempfile.NamedTemporaryFile(
+            "w", newline="", encoding="utf-8", dir=path.parent, delete=False
+        ) as file:
+            temporary_path = file.name
+            writer = csv.DictWriter(file, fieldnames=fieldnames, extrasaction="ignore")
+            writer.writeheader()
+            writer.writerows(rows)
+        os.replace(temporary_path, path)
+    except Exception:
+        if temporary_path and os.path.exists(temporary_path):
+            os.unlink(temporary_path)
+        raise
+
+
+def _money(value):
+    try:
+        amount = Decimal(str(value))
+        cents_amount = amount.quantize(Decimal("0.01"))
+    except (InvalidOperation, ValueError):
+        raise ValueError("Amount must be a valid number.") from None
+    if not amount.is_finite():
+        raise ValueError("Amount must be a finite number.")
+    if amount != cents_amount:
+        raise ValueError("Amount cannot have more than two decimal places.")
+    if cents_amount <= 0:
+        raise ValueError("Amount must be greater than zero.")
+    return cents_amount
+
+
+class Bank:
+    FILE = str(PROJECT_DIR / "Accounts.csv")
+    HISTORY_DIR = str(PROJECT_DIR / "Transaction_history")
+    BANK_CODE = "SHIV"
+    BRANCH_CODE = "000001"
+
+    def __init__(self, accounts_file=None, history_dir=None):
+        self.accounts_file = Path(accounts_file or self.FILE)
+        self.history_dir = Path(history_dir or self.HISTORY_DIR)
+        self.FILE = str(self.accounts_file)
+        self.balance = Decimal("0.00")
+        self.branch_number = 1
+
+    def _read_accounts(self):
+        if not self.accounts_file.exists():
+            return []
+        with self.accounts_file.open("r", newline="", encoding="utf-8-sig") as file:
+            reader = csv.DictReader(file)
+            if not reader.fieldnames:
+                return []
+            return list(reader)
+
+    def _write_accounts(self, accounts):
+        extra_fields = []
+        for row in accounts:
+            for field in row:
+                if field not in ACCOUNT_FIELDS and field not in extra_fields:
+                    extra_fields.append(field)
+        _atomic_write_csv(self.accounts_file, ACCOUNT_FIELDS + extra_fields, accounts)
+
+    def create_account(self):
         print("\n--- Account Opening ---")
-        self.name = str(input("Enter Name :")).upper()
-        self.last_name = str(input("Enter Name :")).upper()
-
-        for i in self.name and self.last_name:
-          if not i.isalpha() and i != " ":
-            print("Special character found :",i)
-            break
-        else:
-          # print("Valid Name")
-          break  
-      
-       # Phone Number input  
-      while True: 
-        self.phone = input("Phone No.:").strip()  
-        is_valid = True if len(self.phone) == 10 and self.phone.isdigit() else print("Enter Only Digit and  10 Digit Phone number")   
-        if is_valid :break 
-        
-        # gender choise
-      while True:
-          select_gender =   input("Select Gender\n1.Male\n2.Female\n3.Other\nOption :").strip().lower()
-          self.gender = ("Male" if select_gender in( "1","male") else "Female" if select_gender in ("2","female") else "Other" if select_gender in ("3","other")else None)                  
-          if self.gender:
-            break
-          print("Invalid Choise")
-               
-      # Age input
-      while True:
-        try:  
-           self.age = int(input("Age :"))  
-           valid_age = True if self.age>=18 and self.age <=110 else  print("You Are Not Eligible to open Account (Must be 18+) & wrong age\n")
-           if valid_age:
-             break
-           if not valid_age :
-             return
-        except ValueError:
-          print("Enter Age in Digit")
-
-      #country
-      while True:
-         
-        country_list = ["India"]
-
-        self.country_input = input("Country :")
-        for country in country_list:
-              if country == self.country_input.lower():
-                  return country
-        matches_c = get_close_matches(self.country_input,country_list,n=1,cutoff=0.75)
-        if matches_c:
-            # return matches_c[0]
-            print("Matched Country:",matches_c[0])
-            break
-        else:
-          print("Invalid Country")
-      
-      #state    
-      while True: 
-        india_state = ["Andaman and Nicobar Islands","Andhra Pradesh","Arunachal Pradesh","Assam","Bihar","Chhattisgarh","Dadra and nagar Haveli and Damanand Diu","Delhi","Goa","Gujarat","Haryana","Himachal Pradesh","Jammu and Kashmir","Jharkhand","Karnataka","Kerala","Ladakh","Lakshadweep","Madhy Pradesh","Maharashtra","Manipur","Meghalaya","Mizora","Nagaland","Odisha","Puducherry","Punjab","Rajasthan","Sikkim","Tamil Nadu","Telangana","Tripura","Uttar Pradesh","Uttarakhand","West bengal"]    
-        
-        self.state_input = input("State :").lower()
-        for state in india_state:
-          if state == self.state_input:
-              return state        
-        matches = get_close_matches(self.state_input,india_state,n=1,cutoff=0.75)
-        if matches:
-            print("Matched State:",matches[0])
-            break
-        else:
-          print("Invalid State")
-        
-
-      # Aadhaar Input
-      while True:    
-        self.aadhar_no = input("Aadhar (12 digit).:").strip()
-        valid_aadhar =True if len(self.aadhar_no) == 12 and self.aadhar_no.isdigit() else print("Invalid Aadhaar Number. Must be 12 digits.or only number")
-        if valid_aadhar:
-          if self.aadhar_exists(self.aadhar_no):
-            print("Aadhaar number alredy exists")
+        name = self._prompt_name("First name: ")
+        if name is None:
             return
-          break
-        
-      # Account Number Generation
-      while True:
-        self.account_no = random.randint(1000000000,9999999999)
-        self.code = f"{self.branch_number : 06d}" 
-        self.branch_number += 1
-        self.ifsc = f"{self.bank_code}0{self.code}" 
-        if not self.account_exists(self.account_no) and not self.ifsc_exists(self.ifsc):
-          break
-      print("Account is sucessfull Created Account No.:",self.account_no) 
+        last_name = self._prompt_name("Last name: ")
+        if last_name is None:
+            return
 
-      # Deposite Input
-      while True:
-        try:
-           amount = int(input("Deposite Amt.:")) 
-           if amount>= 2000 :
-             break 
-           print("Minimum deposite is Rs.2000") 
-        except ValueError :
-          print("Enter Amount in digit")
-      self.balance = amount 
+        while True:
+            phone = input("Phone number (10 digits): ").strip()
+            if len(phone) == 10 and phone.isdigit():
+                break
+            print("Enter a valid 10-digit phone number.")
 
-      # 7. Write to CSV file
-      file_exists = os.path.exists(self.FILE)
-      fieldnames = ["Name","Last_Name","Phone","Age","Gender","Country","State","Aadhar","Account_no","Ifsc_number","Balance","Status"]
+        while True:
+            gender_option = input(
+                "Select Gender (1. Male, 2. Female, 3. Other): "
+            ).strip().lower()
+            gender = {"1": "Male", "2": "Female", "3": "Other"}.get(gender_option)
+            if gender:
+                break
+            print("Choose 1, 2, or 3.")
 
-      with open(self.FILE, "a",newline="",encoding="utf-8") as file:
-       
-       writer = csv.DictWriter(file,fieldnames=fieldnames) 
-       if not file_exists or os.path.getsize(self.FILE) == 0:
-          writer.writeheader()
-       writer.writerow({
-                "Name": self.name, 
-                "Last_Name": self.last_name,
-                "Phone": self.phone, 
-                "Age": self.age, 
-                "Gender": self.gender,
-                "Country": matches_c[0],
-                "State" : matches[0],
-                "Aadhar": self.aadhar_no, 
-                "Account_no": self.account_no,
-                "Ifsc_number" : self.ifsc, 
-                "Balance": self.balance,
-                "Status": "Active"
-            })
-       
-      self.log_transaction(self.account_no, "Deposit", amount,0, self.balance)
+        while True:
+            try:
+                age = int(input("Age (18-110): ").strip())
+            except ValueError:
+                print("Enter age as a whole number.")
+                continue
+            if 18 <= age <= 110:
+                break
+            print("Account holder must be between 18 and 110.")
 
-      print("\n Account Details :")
-      print("Name        :",self.name)
-      print("Last Name   :",self.last_name)
-      print("Phone       :",self.phone)
-      print("Age         :",self.age)
-      print("Gender      :",self.gender)
-      print("Country     :",matches_c[0])
-      print("State       :",matches[0])
-      print("Aadhar No.  :",self.aadhar_no)
-      print("Account no. :",self.account_no)
-      print("Ifsc_number :",self.ifsc)
-      print("Balance     :",self.balance)
-      break
+        country = self._prompt_choice("Country (India): ", ("India",))
+        state = self._prompt_choice("State: ", INDIA_STATES)
+        while True:
+            aadhar = input("Aadhaar (12 digits): ").strip()
+            if len(aadhar) != 12 or not aadhar.isdigit():
+                print("Enter a valid 12-digit Aadhaar number.")
+            elif self.aadhar_exists(aadhar):
+                print("An account with this Aadhaar number already exists.")
+                return
+            else:
+                break
 
-  def aadhar_exists(self,aadhar_no):
-    if not os.path.exists(self.FILE):
-      return False
+        while True:
+            opening_balance = input(
+                f"Opening deposit (minimum Rs. {MIN_OPENING_BALANCE:.2f}): "
+            ).strip()
+            try:
+                amount = _money(opening_balance)
+            except ValueError:
+                print("Enter a valid positive amount.")
+                continue
+            if amount >= MIN_OPENING_BALANCE:
+                break
+            print(f"Minimum opening deposit is Rs. {MIN_OPENING_BALANCE:.2f}.")
 
-    with open(self.FILE,"r",newline="",encoding="utf-8") as file:
-      reader = csv.DictReader(file)
-      for row in reader:
-        if row["Aadhar"] == str(aadhar_no).strip():
-          return True
-    return False    
-     
-  def account_exists(self,account_no):
-    if not os.path.exists(self.FILE):
-      return False
-    
-    with open(self.FILE,"r",newline="",encoding="utf-8") as file:
-      reader =csv.DictReader(file)
-      for row in reader:
-        if row["Account_no"] == str(account_no).strip():
-            return True
-    return False
+        accounts = self._read_accounts()
+        used_accounts = {row.get("Account_no", "") for row in accounts}
+        while True:
+            account_no = str(secrets.randbelow(9_000_000_000) + 1_000_000_000)
+            if account_no not in used_accounts:
+                break
+        ifsc = f"{self.BANK_CODE}0{self.BRANCH_CODE}"
+        account = {
+            "Name": name,
+            "Last_Name": last_name,
+            "Phone": phone,
+            "Age": str(age),
+            "Gender": gender,
+            "Country": country,
+            "State": state,
+            "Aadhar": aadhar,
+            "Account_no": account_no,
+            "Ifsc_number": ifsc,
+            "Balance": f"{amount:.2f}",
+            "Status": "Active",
+        }
+        accounts.append(account)
+        self._write_accounts(accounts)
+        self.log_transaction(account_no, ifsc, "Opening Deposit", amount, 0, amount)
+        print("Account created successfully.")
+        print("Account number:", account_no)
+        print("IFSC number:", ifsc)
+        print("Opening balance: Rs.", f"{amount:.2f}")
 
-  def ifsc_exists(self,ifsc_number):
-      if not os.path.exists(self.FILE):
-        return False
-      
-      with open(self.FILE,"r",newline="",encoding="utf-8") as file:
-        reader =csv.DictReader(file)
-        for row in reader:
-          if row["Ifsc_number"] == str(ifsc_number).strip():
-              return True
-      return False
-  
-  def find_account(self,account_no, ifsc_number,status=None):
-      if not os.path.exists(self.FILE):
-         return None
+    @staticmethod
+    def _prompt_name(prompt):
+        while True:
+            value = input(prompt).strip()
+            if value and all(
+                char.isalpha() or char in " -'" for char in value
+            ):
+                return value.upper()
+            print("Enter a name using letters, spaces, apostrophes, or hyphens.")
 
-      with open(self.FILE,"r",newline="",encoding="utf-8") as file:
-        reader =csv.DictReader(file)
-        for row in reader:
-          if row["Account_no"] == str(account_no).strip() and row["Ifsc_number"] == str(ifsc_number ).strip() and (status is None or row["Status"].strip() == status):             
-              return row
-      return None
+    @staticmethod
+    def _prompt_choice(prompt, choices):
+        choices_by_normalized_name = {choice.casefold(): choice for choice in choices}
+        while True:
+            value = input(prompt).strip()
+            choice = choices_by_normalized_name.get(value.casefold())
+            if choice:
+                return choice
+            print("Invalid selection. Please enter a supported value.")
 
-    
-  def log_transaction(self, account_no,txn_type, cr,dr, balance):
-    file_path =f"Transaction_history/{account_no}.csv"
+    def aadhar_exists(self, aadhar_no):
+        return any(row.get("Aadhar", "").strip() == str(aadhar_no).strip()
+                   for row in self._read_accounts())
 
-    txn_id = "TXN" + uuid.uuid4().hex[:8].upper()
-    now = datetime.now()
-    date_str = now.strftime("%Y-%m-%d")
-    time_str = now.strftime("%H:%M:%S")
-    file_exists = os.path.exists(file_path)
-    fieldnames = ["Transaction_Id", "Account_No", "Date", "Time", "Transaction_Type", "CR","DR", "Balance"]
+    def account_exists(self, account_no):
+        return any(row.get("Account_no", "").strip() == str(account_no).strip()
+                   for row in self._read_accounts())
 
-    with open(file_path, "a", newline="", encoding="utf-8") as file_2:
-      writer = csv.DictWriter(file_2, fieldnames=fieldnames)
-      if not file_exists or os.path.getsize(file_path) == 0:
-        writer.writeheader()
-      writer.writerow({
-          "Transaction_Id": txn_id,
-          "Account_No": account_no,
-          "Date": date_str,
-          "Time": time_str,
-          "Transaction_Type": txn_type,
-          "CR": cr,
-          "DR": dr,
-          "Balance": balance
-      })  
+    def ifsc_exists(self, ifsc_number):
+        return any(row.get("Ifsc_number", "").strip() == str(ifsc_number).strip()
+                   for row in self._read_accounts())
 
-    
-  # Balance update in csv file
-  def update_balance(self,account_no,new_balance):
-    accounts = []  
-    if not os.path.exists(self.FILE):
-      return
-    
-    with open(self.FILE,"r",newline="",encoding="utf-8") as file:
-      reader = csv.DictReader(file)
-      for row in reader:
-        if row["Account_no"] == str(account_no).strip():
-          row["Balance"] = str(new_balance)
-        accounts.append(row)
-    fieldnames = ["Name","Last_Name","Phone","Age","Gender","Country","State","Aadhar","Account_no","Ifsc_number","Balance","Status"]    
+    def find_account(self, account_no, ifsc_number, status=None):
+        for row in self._read_accounts():
+            if (
+                row.get("Account_no", "").strip() == str(account_no).strip()
+                and row.get("Ifsc_number", "").strip().casefold()
+                == str(ifsc_number).strip().casefold()
+                and (status is None or row.get("Status", "").strip() == status)
+            ):
+                return row
+        return None
 
-    with open(self.FILE,"w",newline="",encoding="utf-8") as file:
-      writer = csv.DictWriter(file,fieldnames=fieldnames)
-      writer.writeheader()
-      writer.writerows(accounts)
+    def log_transaction(
+        self,
+        account_no,
+        ifsc_number,
+        txn_type,
+        cr,
+        dr,
+        balance,
+        counterparty="",
+    ):
+        path = self.history_dir / f"{account_no}.csv"
+        path.parent.mkdir(parents=True, exist_ok=True)
+        now = datetime.now()
+        row = {
+            "Transaction_Id": f"TXN{uuid.uuid4().hex[:12].upper()}",
+            "Account_No": str(account_no),
+            "Ifsc_Number": str(ifsc_number),
+            "Date": now.strftime("%Y-%m-%d"),
+            "Time": now.strftime("%H:%M:%S"),
+            "Transaction_Type": txn_type,
+            "CR": f"{Decimal(str(cr)):.2f}",
+            "DR": f"{Decimal(str(dr)):.2f}",
+            "Balance": f"{Decimal(str(balance)):.2f}",
+            "Counterparty_Account": str(counterparty),
+        }
+        transactions = []
+        if path.exists() and path.stat().st_size > 0:
+            with path.open("r", newline="", encoding="utf-8-sig") as file:
+                for old_row in csv.DictReader(file):
+                    transactions.append(
+                        {
+                            field: old_row.get(field, "")
+                            or (
+                                str(ifsc_number)
+                                if field == "Ifsc_Number"
+                                else "0.00"
+                                if field in {"CR", "DR"}
+                                else ""
+                            )
+                            for field in TRANSACTION_FIELDS
+                        }
+                    )
+        transactions.append(row)
+        _atomic_write_csv(path, TRANSACTION_FIELDS, transactions)
+
+    def update_balance(self, account_no, new_balance):
+        balance = Decimal(str(new_balance)).quantize(Decimal("0.01"))
+        if not balance.is_finite() or balance < 0:
+            raise ValueError("Balance must be a finite, non-negative amount.")
+        accounts = self._read_accounts()
+        updated = False
+        for row in accounts:
+            if row.get("Account_no", "").strip() == str(account_no).strip():
+                row["Balance"] = f"{balance:.2f}"
+                updated = True
+        if not updated:
+            raise ValueError("Account not found.")
+        self._write_accounts(accounts)
+
+    def deposit(self, account_no, ifsc_number, amount):
+        amount = _money(amount)
+        account = self.find_account(account_no, ifsc_number, status="Active")
+        if account is None:
+            raise ValueError("Account not found or not active.")
+        new_balance = Decimal(account["Balance"]) + amount
+        self.update_balance(account_no, new_balance)
+        self.log_transaction(
+            account_no, ifsc_number, "Deposit", amount, 0, new_balance
+        )
+        return new_balance
+
+    def withdraw(self, account_no, ifsc_number, amount):
+        amount = _money(amount)
+        account = self.find_account(account_no, ifsc_number, status="Active")
+        if account is None:
+            raise ValueError("Account not found or not active.")
+        current_balance = Decimal(account["Balance"])
+        if amount > current_balance:
+            raise ValueError("Insufficient balance.")
+        new_balance = current_balance - amount
+        self.update_balance(account_no, new_balance)
+        self.log_transaction(
+            account_no, ifsc_number, "Withdrawal", 0, amount, new_balance
+        )
+        return new_balance
+
+    def transfer(
+        self, sender_no, sender_ifsc, receiver_no, receiver_ifsc, amount
+    ):
+        amount = _money(amount)
+        if (
+            str(sender_no).strip() == str(receiver_no).strip()
+            and str(sender_ifsc).strip().casefold()
+            == str(receiver_ifsc).strip().casefold()
+        ):
+            raise ValueError("Sender and receiver must be different accounts.")
+        accounts = self._read_accounts()
+        sender = next(
+            (
+                row for row in accounts
+                if row.get("Account_no", "").strip() == str(sender_no).strip()
+                and row.get("Ifsc_number", "").strip().casefold()
+                == str(sender_ifsc).strip().casefold()
+                and row.get("Status", "").strip() == "Active"
+            ),
+            None,
+        )
+        receiver = next(
+            (
+                row for row in accounts
+                if row.get("Account_no", "").strip() == str(receiver_no).strip()
+                and row.get("Ifsc_number", "").strip().casefold()
+                == str(receiver_ifsc).strip().casefold()
+                and row.get("Status", "").strip() == "Active"
+            ),
+            None,
+        )
+        if sender is None:
+            raise ValueError("Sender account not found or not active.")
+        if receiver is None:
+            raise ValueError("Receiver account not found or not active.")
+        sender_balance = Decimal(sender["Balance"])
+        if amount > sender_balance:
+            raise ValueError("Insufficient balance.")
+        new_sender_balance = sender_balance - amount
+        new_receiver_balance = Decimal(receiver["Balance"]) + amount
+        sender["Balance"] = f"{new_sender_balance:.2f}"
+        receiver["Balance"] = f"{new_receiver_balance:.2f}"
+        self._write_accounts(accounts)
+        self.log_transaction(
+            sender_no,
+            sender_ifsc,
+            "Transfer Out",
+            0,
+            amount,
+            new_sender_balance,
+            receiver_no,
+        )
+        self.log_transaction(
+            receiver_no,
+            receiver_ifsc,
+            "Transfer In",
+            amount,
+            0,
+            new_receiver_balance,
+            sender_no,
+        )
+        return new_sender_balance, new_receiver_balance
+
+    def set_account_status(self, account_no, ifsc_number, status):
+        if status not in {"Active", "Frozen"}:
+            raise ValueError("Unsupported account status.")
+        accounts = self._read_accounts()
+        account = next(
+            (
+                row for row in accounts
+                if row.get("Account_no", "").strip() == str(account_no).strip()
+                and row.get("Ifsc_number", "").strip().casefold()
+                == str(ifsc_number).strip().casefold()
+            ),
+            None,
+        )
+        if account is None:
+            raise ValueError("Account not found.")
+        if account.get("Status", "").strip() == status:
+            raise ValueError(f"Account is already {status.lower()}.")
+        account["Status"] = status
+        self._write_accounts(accounts)
+        self._log_status_change(account_no, ifsc_number, status)
+
+    def _log_status_change(self, account_no, ifsc_number, status):
+        path = self.history_dir.parent / "freeze.csv"
+        path.parent.mkdir(parents=True, exist_ok=True)
+        exists = path.exists() and path.stat().st_size > 0
+        with path.open("a", newline="", encoding="utf-8") as file:
+            writer = csv.DictWriter(
+                file,
+                fieldnames=["Account_No", "Ifsc_Number", "Date_Time", "Status"],
+            )
+            if not exists:
+                writer.writeheader()
+            writer.writerow(
+                {
+                    "Account_No": str(account_no),
+                    "Ifsc_Number": str(ifsc_number),
+                    "Date_Time": datetime.now().isoformat(timespec="seconds"),
+                    "Status": status,
+                }
+            )
