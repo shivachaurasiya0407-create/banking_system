@@ -1,8 +1,14 @@
 import re
 from typing import Annotated
 
-from pydantic import BaseModel, ConfigDict, Field, StringConstraints, field_validator
-
+from pydantic import (
+    BaseModel,
+    ConfigDict,
+    Field,
+    StringConstraints,
+    field_validator,
+    model_validator,
+)
 
 Username = Annotated[
     str, StringConstraints(strip_whitespace=True, min_length=3, max_length=100)
@@ -88,6 +94,18 @@ class AccountStatusRequest(BaseModel):
     status: Annotated[str, Field(pattern=r"^(ACTIVE|FROZEN|CLOSED)$")]
 
 
+class TransactionReversalRequest(BaseModel):
+    reason: Annotated[str, Field(min_length=5, max_length=250)]
+
+    @field_validator("reason")
+    @classmethod
+    def normalize_reason(cls, value):
+        value = value.strip()
+        if len(value) < 5:
+            raise ValueError("Reversal reason must contain at least five characters.")
+        return value
+
+
 class StaffCreateRequest(BaseModel):
     username: Username
     full_name: Annotated[str, Field(min_length=1, max_length=200)]
@@ -123,3 +141,14 @@ class StaffPasswordResetRequest(BaseModel):
                 "Password must include uppercase, lowercase, and numeric characters."
             )
         return value
+
+
+class StaffUpdateRequest(BaseModel):
+    role: Annotated[str | None, Field(pattern=r"^(ADMIN|TELLER|AUDITOR)$")] = None
+    active: bool | None = None
+
+    @model_validator(mode="after")
+    def require_an_update(self):
+        if self.role is None and self.active is None:
+            raise ValueError("Provide a new role or active status.")
+        return self

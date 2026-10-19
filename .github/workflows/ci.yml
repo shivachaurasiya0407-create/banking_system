@@ -1,0 +1,38 @@
+name: Banking API checks
+
+on:
+  push:
+  pull_request:
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    services:
+      postgres:
+        image: postgres:17
+        env:
+          POSTGRES_DB: banking_system
+          POSTGRES_USER: banking_app
+          POSTGRES_PASSWORD: ci-only-password
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U banking_app -d banking_system"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 10
+    env:
+      DATABASE_URL: postgresql+psycopg://banking_app:ci-only-password@localhost:5432/banking_system
+      JWT_SECRET: ci-only-jwt-secret-change-me-000000000000000000000
+      PII_HMAC_KEY: ci-only-pii-hmac-change-me-000000000000000000000
+      JWT_ISSUER: banking-system-ci
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+      - run: python -m pip install -r requirements-dev.txt
+      - run: alembic upgrade head
+      - run: ruff check banking_api/app.py banking_api/import_csv.py banking_api/models.py banking_api/schemas.py banking_api/service.py alembic/versions/0002_transaction_reversals.py tests
+      - run: python -m pytest -q

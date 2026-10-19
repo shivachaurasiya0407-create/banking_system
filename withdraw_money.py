@@ -1,6 +1,5 @@
 from bank_system import Bank
 
-
 def withdraw_money():
     bank = Bank()
     print("--- Withdraw Money ---")

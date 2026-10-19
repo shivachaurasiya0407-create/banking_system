@@ -7,7 +7,7 @@ from contextlib import contextmanager
 from dataclasses import dataclass
 from decimal import Decimal, InvalidOperation
 
-from sqlalchemy import select
+from sqlalchemy import func, select
 from sqlalchemy.dialects.postgresql import insert as pg_insert
 from sqlalchemy.dialects.sqlite import insert as sqlite_insert
 from sqlalchemy.orm import Session
@@ -22,7 +22,6 @@ from banking_api.models import (
     LedgerTransaction,
 )
 from banking_api.settings import Settings
-
 
 IFSC = "SHIV0000001"
 MIN_OPENING_BALANCE_MINOR = 200_000
@@ -270,11 +269,92 @@ class BankingService:
                 transaction.id, (account.account_number,), (account.balance_minor,)
             )
 
+    def reverse_transaction(self, actor_id, idempotency_key, original_id, reason):
+        original_id = uuid.UUID(str(original_id))
+        reason = str(reason).strip()
+        if not reason or len(reason) > 250:
+            raise BankingError("A reversal reason of at most 250 characters is required.")
+        request = {"original_transaction_id": str(original_id), "reason": reason}
+        with self._atomic():
+            reversal, replay = self._begin_operation(
+                actor_id, idempotency_key, "REVERSAL", request
+            )
+            if replay:
+                return self._replayed_result(reversal)
+            original = self.session.scalar(
+                select(LedgerTransaction)
+                .where(LedgerTransaction.id == original_id)
+                .with_for_update()
+            )
+            if original is None:
+                raise BankingError("Transaction to reverse was not found.")
+            if original.status != "POSTED" or original.kind in {"ACCOUNT_STATUS", "REVERSAL"}:
+                raise BankingError("Only posted money transactions can be reversed.")
+            if original.actor_id == actor_id:
+                raise BankingError("A different staff member must approve the reversal.")
+            entries = self.session.execute(
+                select(LedgerEntry, LedgerAccount)
+                .join(LedgerAccount, LedgerEntry.ledger_account_id == LedgerAccount.id)
+                .where(LedgerEntry.transaction_id == original.id)
+                .order_by(LedgerAccount.id)
+            ).all()
+            if len(entries) < 2 or sum(entry.amount_minor for entry, _ in entries) != 0:
+                raise BankingError("The original transaction has invalid ledger postings.")
+
+            account_ids = [
+                ledger_account.account_id
+                for _, ledger_account in entries
+                if ledger_account.account_type == "CUSTOMER_DEPOSIT"
+            ]
+            accounts = self.session.scalars(
+                select(Account)
+                .where(Account.id.in_(account_ids))
+                .order_by(Account.id)
+                .with_for_update()
+            ).all()
+            account_by_id = {account.id: account for account in accounts}
+            for entry, ledger_account in entries:
+                if ledger_account.account_type == "CUSTOMER_DEPOSIT":
+                    account = account_by_id.get(ledger_account.account_id)
+                    if account is None:
+                        raise BankingError("A customer account for this ledger entry is missing.")
+                    if account.status != "ACTIVE":
+                        raise BankingError("Only active accounts can be affected by a reversal.")
+                    account.balance_minor += entry.amount_minor
+                    if account.balance_minor < 0:
+                        raise BankingError("Reversal would produce a negative account balance.")
+
+            reversal.kind = "REVERSAL"
+            reversal.reversal_of_id = original.id
+            reversal.memo = reason
+            original.status = "REVERSED"
+            reversal_entries = [
+                (ledger_account, -entry.amount_minor)
+                for entry, ledger_account in entries
+            ]
+            self._post(reversal, reversal_entries)
+            result_accounts = tuple(account.account_number for account in accounts)
+            result_balances = tuple(account.balance_minor for account in accounts)
+            self._store_result(reversal, result_accounts, result_balances)
+            reversal.result_id = str(original.id)
+            self._audit(
+                actor_id,
+                "ledger.transaction_reversed",
+                "ledger_transaction",
+                original.id,
+                {"reversal_id": str(reversal.id), "reason": reason},
+            )
+            return OperationResult(
+                reversal.id, result_accounts, result_balances
+            )
+
     def get_balance(self, account_number):
         account = self._get_account(account_number, lock=False)
         return account
 
-    def get_transactions(self, account_number, limit=100, offset=0):
+    def get_transactions(
+        self, account_number, limit=100, offset=0, start_at=None, end_at=None, kind=None
+    ):
         account = self._get_account(account_number, lock=False)
         statement = (
             select(LedgerEntry, LedgerTransaction)
@@ -287,11 +367,115 @@ class BankingService:
                 LedgerEntry.ledger_account_id == LedgerAccount.id,
             )
             .where(LedgerAccount.account_id == account.id)
-            .order_by(LedgerTransaction.created_at.desc())
-            .limit(limit)
-            .offset(offset)
         )
+        if start_at is not None:
+            statement = statement.where(LedgerTransaction.created_at >= start_at)
+        if end_at is not None:
+            statement = statement.where(LedgerTransaction.created_at <= end_at)
+        if kind is not None:
+            statement = statement.where(LedgerTransaction.kind == kind)
+        statement = statement.order_by(
+            LedgerTransaction.created_at.desc(), LedgerTransaction.id.desc()
+        ).limit(limit).offset(offset)
         return account, self.session.execute(statement).all()
+
+    def get_statement(
+        self, account_number, limit=1000, offset=0, start_at=None, end_at=None, kind=None
+    ):
+        account = self._get_account(account_number, lock=False)
+        running_balance = func.sum(-LedgerEntry.amount_minor).over(
+            order_by=(
+                LedgerTransaction.created_at,
+                LedgerTransaction.id,
+                LedgerEntry.id,
+            )
+        ).label("balance_minor")
+        history = (
+            select(
+                LedgerEntry.id.label("entry_id"),
+                LedgerEntry.amount_minor.label("amount_minor"),
+                LedgerTransaction.id.label("transaction_id"),
+                LedgerTransaction.kind.label("kind"),
+                LedgerTransaction.status.label("status"),
+                LedgerTransaction.created_at.label("created_at"),
+                running_balance,
+            )
+            .join(
+                LedgerTransaction,
+                LedgerEntry.transaction_id == LedgerTransaction.id,
+            )
+            .join(
+                LedgerAccount,
+                LedgerEntry.ledger_account_id == LedgerAccount.id,
+            )
+            .where(LedgerAccount.account_id == account.id)
+            .subquery()
+        )
+        statement = select(history)
+        if start_at is not None:
+            statement = statement.where(history.c.created_at >= start_at)
+        if end_at is not None:
+            statement = statement.where(history.c.created_at <= end_at)
+        if kind is not None:
+            statement = statement.where(history.c.kind == kind)
+        statement = statement.order_by(
+            history.c.created_at.desc(),
+            history.c.transaction_id.desc(),
+            history.c.entry_id.desc(),
+        ).limit(limit).offset(offset)
+        return account, self.session.execute(statement).all()
+
+    def reconcile_ledger(self):
+        accounts = self.session.execute(
+            select(Account.id, Account.account_number, Account.balance_minor)
+        ).all()
+        ledger_balances = dict(
+            self.session.execute(
+                select(
+                    LedgerAccount.account_id,
+                    func.coalesce(func.sum(LedgerEntry.amount_minor), 0),
+                )
+                .outerjoin(LedgerEntry, LedgerEntry.ledger_account_id == LedgerAccount.id)
+                .where(LedgerAccount.account_type == "CUSTOMER_DEPOSIT")
+                .group_by(LedgerAccount.account_id)
+            ).all()
+        )
+        discrepancies = []
+        for account_id, account_number, balance_minor in accounts:
+            ledger_minor = ledger_balances.pop(account_id, None)
+            if ledger_minor is None:
+                discrepancies.append({
+                    "account_number": account_number,
+                    "account_balance_minor": balance_minor,
+                    "ledger_balance_minor": None,
+                    "difference_minor": None,
+                    "issue": "missing_customer_ledger",
+                })
+            elif balance_minor != -ledger_minor:
+                discrepancies.append({
+                    "account_number": account_number,
+                    "account_balance_minor": balance_minor,
+                    "ledger_balance_minor": -ledger_minor,
+                    "difference_minor": balance_minor + ledger_minor,
+                    "issue": "balance_mismatch",
+                })
+        for account_id, ledger_minor in ledger_balances.items():
+            discrepancies.append({
+                "account_number": None,
+                "account_balance_minor": None,
+                "ledger_balance_minor": -ledger_minor,
+                "difference_minor": None,
+                "issue": "orphan_customer_ledger",
+            })
+        ledger_total = self.session.scalar(
+            select(func.coalesce(func.sum(LedgerEntry.amount_minor), 0))
+        )
+        return {
+            "account_count": len(accounts),
+            "ledger_entry_total_minor": ledger_total,
+            "balanced": ledger_total == 0 and not discrepancies,
+            "discrepancies": discrepancies,
+        }
 
     def _begin_operation(self, actor_id, key, kind, request):
         if not key or len(key) > 128:

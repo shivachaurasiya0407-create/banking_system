@@ -10,11 +10,9 @@ from sqlalchemy import select
 from sqlalchemy.orm import Session
 
 from banking_api.database import get_session
-from banking_api.models import StaffUser
-from banking_api.models import AuditEvent
+from banking_api.models import AuditEvent, StaffUser
 from banking_api.security import verify_password
 from banking_api.settings import Settings
-
 
 bearer_scheme = HTTPBearer(auto_error=False)
 DUMMY_PASSWORD_HASH = (
@@ -61,7 +59,7 @@ def get_current_staff(
             settings.jwt_secret,
             algorithms=["HS256"],
             issuer=settings.jwt_issuer,
-            options={"require": ["exp", "iat", "iss", "sub"]},
+            options={"require": ["exp", "iat", "iss", "sub", "ver"]},
         )
         staff_id = uuid.UUID(claims["sub"])
     except (jwt.InvalidTokenError, KeyError, ValueError):
@@ -71,7 +69,7 @@ def get_current_staff(
             headers={"WWW-Authenticate": "Bearer"},
         ) from None
     staff = session.scalar(select(StaffUser).where(StaffUser.id == staff_id))
-    if staff is None or not staff.active:
+    if staff is None or not staff.active or claims.get("ver") != staff.token_version:
         raise HTTPException(
             status_code=status.HTTP_401_UNAUTHORIZED,
             detail="Staff account is unavailable.",
@@ -81,7 +79,7 @@ def get_current_staff(
 
 
 def require_roles(*roles):
-    def role_dependency(staff=Depends(get_current_staff)):
+    def role_dependency(staff: Annotated[StaffUser, Depends(get_current_staff)]):
         if staff.role not in roles:
             raise HTTPException(
                 status_code=status.HTTP_403_FORBIDDEN,
@@ -93,12 +91,13 @@ def require_roles(*roles):
 
 
 def create_access_token(staff, settings):
-    now = datetime.datetime.now(datetime.timezone.utc)
+    now = datetime.datetime.now(datetime.UTC)
     expires = now + datetime.timedelta(minutes=settings.access_token_minutes)
     return jwt.encode(
         {
             "sub": str(staff.id),
             "role": staff.role,
+            "ver": staff.token_version,
             "iat": now,
             "exp": expires,
             "iss": settings.jwt_issuer,
@@ -115,7 +114,7 @@ def authenticate_staff(session, username, password, settings):
         .where(StaffUser.username == normalized_username)
         .with_for_update()
     )
-    now = datetime.datetime.now(datetime.timezone.utc)
+    now = datetime.datetime.now(datetime.UTC)
     if staff is None:
         verify_password(password, DUMMY_PASSWORD_HASH)
         return None

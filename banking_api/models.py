@@ -2,6 +2,7 @@ import uuid
 from datetime import datetime
 
 from sqlalchemy import (
+    JSON,
     BigInteger,
     Boolean,
     CheckConstraint,
@@ -9,7 +10,6 @@ from sqlalchemy import (
     ForeignKey,
     Index,
     Integer,
-    JSON,
     String,
     Text,
     UniqueConstraint,
@@ -37,6 +37,7 @@ class StaffUser(Base):
     full_name: Mapped[str] = mapped_column(String(200), nullable=False)
     role: Mapped[str] = mapped_column(String(20), nullable=False)
     password_hash: Mapped[str] = mapped_column(Text, nullable=False)
+    token_version: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
     active: Mapped[bool] = mapped_column(Boolean, nullable=False, default=True)
     failed_login_attempts: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
     locked_until: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
@@ -94,7 +95,7 @@ class LedgerTransaction(Base):
     __tablename__ = "ledger_transactions"
     __table_args__ = (
         CheckConstraint(
-            "kind IN ('OPENING_DEPOSIT', 'DEPOSIT', 'WITHDRAWAL', 'TRANSFER', 'ACCOUNT_STATUS')",
+            "kind IN ('OPENING_DEPOSIT', 'DEPOSIT', 'WITHDRAWAL', 'TRANSFER', 'ACCOUNT_STATUS', 'REVERSAL')",
             name="ck_ledger_transaction_kind",
         ),
         CheckConstraint("status IN ('PENDING', 'POSTED', 'REVERSED')", name="ck_ledger_status"),
@@ -112,6 +113,9 @@ class LedgerTransaction(Base):
     status: Mapped[str] = mapped_column(String(16), nullable=False, default="PENDING")
     memo: Mapped[str] = mapped_column(String(250), nullable=False, default="")
     result_id: Mapped[str | None] = mapped_column(String(200))
+    reversal_of_id: Mapped[uuid.UUID | None] = mapped_column(
+        ForeignKey("ledger_transactions.id", ondelete="RESTRICT")
+    )
     result_payload: Mapped[dict | None] = mapped_column(
         JSON().with_variant(JSONB(), "postgresql")
     )
@@ -119,6 +123,15 @@ class LedgerTransaction(Base):
         DateTime(timezone=True), nullable=False, server_default=func.now()
     )
     entries: Mapped[list["LedgerEntry"]] = relationship(back_populates="transaction")
+
+
+Index(
+    "uq_ledger_transactions_reversal_of",
+    LedgerTransaction.reversal_of_id,
+    unique=True,
+    postgresql_where=text("reversal_of_id IS NOT NULL"),
+    sqlite_where=text("reversal_of_id IS NOT NULL"),
+)
 
 
 class LedgerAccount(Base):
