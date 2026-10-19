@@ -10,26 +10,31 @@ from typing import Annotated
 from fastapi import Depends, FastAPI, Header, HTTPException, Query, Request, status
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse, StreamingResponse
-from sqlalchemy import func, select
+from sqlalchemy import func, or_, select
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
 from banking_api.auth import (
     authenticate_staff,
     create_access_token,
+    get_current_staff,
     get_db,
     get_settings,
     require_roles,
 )
+from banking_api.locations import INDIA_STATES
 from banking_api.models import (
     Account,
     AuditEvent,
+    Branch,
     Customer,
+    LedgerTransaction,
     StaffUser,
 )
 from banking_api.schemas import (
     AccountOpenRequest,
     AccountStatusRequest,
+    BranchCreateRequest,
     LoginRequest,
     MoneyRequest,
     StaffCreateRequest,
@@ -135,6 +140,101 @@ def readiness(session: Annotated[Session, Depends(get_db)]):
 
     session.execute(text("SELECT 1"))
     return {"status": "ready"}
+
+
+@app.get("/auth/me", tags=["authentication"])
+def current_staff(actor: Annotated[StaffUser, Depends(get_current_staff)]):
+    return {
+        "id": str(actor.id),
+        "username": actor.username,
+        "full_name": actor.full_name,
+        "role": actor.role,
+    }
+
+
+@app.get("/dashboard/summary", tags=["dashboard"])
+def dashboard_summary(
+    actor: Annotated[StaffUser, Depends(require_roles("ADMIN", "TELLER", "AUDITOR"))],
+    session: Annotated[Session, Depends(get_db)],
+):
+    counts = dict(
+        session.execute(
+            select(Account.status, func.count(Account.id)).group_by(Account.status)
+        ).all()
+    )
+    total_balance_minor = session.scalar(
+        select(func.coalesce(func.sum(Account.balance_minor), 0))
+    )
+    transaction_count = session.scalar(
+        select(func.count()).select_from(LedgerTransaction)
+    )
+    session.add(
+        AuditEvent(
+            actor_id=actor.id,
+            action="dashboard.summary_read",
+            entity_type="dashboard",
+            entity_id="summary",
+        )
+    )
+    session.commit()
+    return {
+        "accounts": {
+            "total": sum(counts.values()),
+            "active": counts.get("ACTIVE", 0),
+            "frozen": counts.get("FROZEN", 0),
+            "closed": counts.get("CLOSED", 0),
+        },
+        "total_balance": f"{Decimal(total_balance_minor or 0) / 100:.2f}",
+        "transactions": transaction_count,
+    }
+
+
+@app.get("/branches", tags=["branches"])
+def list_branches(
+    actor: Annotated[StaffUser, Depends(require_roles("ADMIN", "TELLER", "AUDITOR"))],
+    session: Annotated[Session, Depends(get_db)],
+):
+    branches = [
+        {"ifsc": branch.ifsc, "name": branch.name}
+        for branch in session.scalars(select(Branch).order_by(Branch.name, Branch.ifsc))
+    ]
+    session.add(
+        AuditEvent(
+            actor_id=actor.id,
+            action="branch.list",
+            entity_type="branch",
+            entity_id="collection",
+        )
+    )
+    session.commit()
+    return branches
+
+
+@app.get("/metadata/india-states", tags=["metadata"])
+def list_india_states():
+    return list(INDIA_STATES)
+
+
+@app.post("/branches", status_code=201, tags=["branches"])
+def create_branch(
+    body: BranchCreateRequest,
+    actor: Annotated[StaffUser, Depends(require_roles("ADMIN"))],
+    session: Annotated[Session, Depends(get_db)],
+):
+    if session.get(Branch, body.ifsc) is not None:
+        raise HTTPException(status_code=409, detail="A branch with this IFSC already exists.")
+    branch = Branch(ifsc=body.ifsc, name=body.name.strip(), next_sequence=1)
+    session.add(branch)
+    session.add(
+        AuditEvent(
+            actor_id=actor.id,
+            action="branch.create",
+            entity_type="branch",
+            entity_id=branch.ifsc,
+        )
+    )
+    session.commit()
+    return {"ifsc": branch.ifsc, "name": branch.name}
 
 
 @app.post("/auth/login", response_model=TokenResponse, tags=["authentication"])
@@ -314,6 +414,7 @@ def open_account(
         idempotency_key,
         body.customer.model_dump(),
         body.opening_deposit,
+        body.branch_ifsc,
     )
     return _operation_response(result)
 
@@ -329,7 +430,15 @@ def search_accounts(
     statement = select(Account, Customer).join(Customer, Account.customer_id == Customer.id)
     if q:
         search = q.strip()
-        statement = statement.where(Account.account_number.startswith(search))
+        if not search:
+            raise HTTPException(status_code=422, detail="Search query cannot be blank.")
+        statement = statement.where(
+            or_(
+                Account.account_number.startswith(search, autoescape=True),
+                Customer.first_name.startswith(search, autoescape=True),
+                Customer.last_name.startswith(search, autoescape=True),
+            )
+        )
     results = session.execute(
         statement.order_by(Account.account_number).limit(limit).offset(offset)
     ).all()

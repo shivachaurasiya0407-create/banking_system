@@ -70,7 +70,10 @@ class BankingService:
             with self.session.begin():
                 yield
 
-    def open_account(self, actor_id, idempotency_key, customer_data, opening_deposit):
+    def open_account(
+        self, actor_id, idempotency_key, customer_data, opening_deposit,
+        branch_ifsc=IFSC,
+    ):
         amount = amount_to_minor_units(opening_deposit)
         if amount < MIN_OPENING_BALANCE_MINOR:
             raise BankingError("Opening deposit must be at least Rs. 2000.00.")
@@ -91,6 +94,7 @@ class BankingService:
             },
             "identity_fingerprint": self._fingerprint(identity_number),
             "opening_deposit_minor": amount,
+            "branch_ifsc": branch_ifsc,
         }
         with self._atomic():
             transaction, replay = self._begin_operation(
@@ -111,7 +115,7 @@ class BankingService:
             )
             self.session.add(customer)
             self.session.flush()
-            account = self._new_account(customer.id)
+            account = self._new_account(customer.id, branch_ifsc)
             account.balance_minor = amount
             self.session.add(account)
             self.session.flush()
@@ -596,9 +600,9 @@ class BankingService:
             self.session.flush()
         return clearing
 
-    def _new_account(self, customer_id):
+    def _new_account(self, customer_id, branch_ifsc=IFSC):
         branch = self.session.scalar(
-            select(Branch).where(Branch.ifsc == IFSC).with_for_update()
+            select(Branch).where(Branch.ifsc == branch_ifsc).with_for_update()
         )
         if branch is None:
             raise BankingError("The configured branch has not been initialized.")
@@ -615,7 +619,7 @@ class BankingService:
             account = Account(
                 customer_id=customer_id,
                 account_number=account_number,
-                ifsc=IFSC,
+                ifsc=branch_ifsc,
                 branch_sequence=sequence,
                 status="ACTIVE",
                 balance_minor=0,

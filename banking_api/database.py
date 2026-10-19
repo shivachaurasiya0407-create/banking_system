@@ -5,7 +5,6 @@ from sqlalchemy.orm import Session, sessionmaker
 
 from banking_api.settings import Settings
 
-
 _session_factory = None
 
 

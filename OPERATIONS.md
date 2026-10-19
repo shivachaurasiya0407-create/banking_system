@@ -2,6 +2,17 @@
 
 This project is an educational prototype, not an approved production banking system. Do not load real customer data or funds until qualified security, privacy, legal, and banking-domain reviews are complete.
 
+## Staff web dashboard
+
+The staff dashboard is a Next.js frontend backed by the PostgreSQL API. Set `BANKING_API_URL` in `.env` to the API origin (default `http://127.0.0.1:8000`), create the initial administrator, and start both services:
+
+```powershell
+.\.venv\Scripts\python.exe -m banking_api.bootstrap_admin
+.\.venv\Scripts\python.exe main.py
+```
+
+In a second terminal, run `npm ci` once and start the dashboard with `npm run dev`; open `http://localhost:3000`. The dashboard supports account search and activity, account opening, deposits, withdrawals, transfers, account freezing, branch setup, staff creation, and ledger reconciliation. The API enforces role permissions and writes banking operations to PostgreSQL. The web server keeps access tokens in short-lived HttpOnly, SameSite cookies and proxies only the dashboard's allowed API routes. Use HTTPS in production so the cookies are Secure.
+
 ## CSV to PostgreSQL migration
 
 1. Back up `Accounts.csv` and `Transaction_history/` to a restricted location. Keep the originals unchanged until the database import and reconciliation are signed off.

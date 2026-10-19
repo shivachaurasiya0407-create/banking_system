@@ -10,6 +10,8 @@ from pydantic import (
     model_validator,
 )
 
+from banking_api.locations import INDIA_STATES
+
 Username = Annotated[
     str, StringConstraints(strip_whitespace=True, min_length=3, max_length=100)
 ]
@@ -66,8 +68,6 @@ class CustomerCreate(BaseModel):
     @field_validator("state")
     @classmethod
     def validate_state(cls, value):
-        from bank_system import INDIA_STATES
-
         canonical_states = {state.casefold(): state for state in INDIA_STATES}
         state = canonical_states.get(value.casefold())
         if state is None:
@@ -78,6 +78,12 @@ class CustomerCreate(BaseModel):
 class AccountOpenRequest(BaseModel):
     customer: CustomerCreate
     opening_deposit: Annotated[str, Field(min_length=1, max_length=24)]
+    branch_ifsc: Annotated[str, Field(min_length=4, max_length=20, pattern=r"^[A-Z0-9]+$")] = "SHIV0000001"
+
+
+class BranchCreateRequest(BaseModel):
+    ifsc: Annotated[str, Field(min_length=4, max_length=20, pattern=r"^[A-Z0-9]+$")]
+    name: Annotated[str, Field(min_length=2, max_length=150)]
 
 
 class MoneyRequest(BaseModel):
