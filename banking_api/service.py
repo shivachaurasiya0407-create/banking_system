@@ -145,7 +145,7 @@ class BankingService:
                 transaction.id, (account.account_number,), (account.balance_minor,)
             )
 
-    def change_balance(self, actor_id, idempotency_key, account_number, kind, amount):
+    def change_balance(self, actor_id, idempotency_key, account_number, kind, amount, memo=""):
         if kind not in {"DEPOSIT", "WITHDRAWAL"}:
             raise BankingError("Unsupported balance operation.")
         amount_minor = amount_to_minor_units(amount)
@@ -154,12 +154,16 @@ class BankingService:
             "kind": kind,
             "amount_minor": amount_minor,
         }
+        if memo:
+            request["memo"] = memo.strip()
         with self._atomic():
             transaction, replay = self._begin_operation(
                 actor_id, idempotency_key, kind, request
             )
             if replay:
                 return self._replayed_result(transaction)
+            if memo:
+                transaction.memo = memo.strip()[:250]
             account = self._get_account(account_number, lock=True)
             if account.status != "ACTIVE":
                 raise BankingError("Account is not active.")
@@ -183,7 +187,7 @@ class BankingService:
                 transaction.id, (account.account_number,), (account.balance_minor,)
             )
 
-    def transfer(self, actor_id, idempotency_key, sender_number, receiver_number, amount):
+    def transfer(self, actor_id, idempotency_key, sender_number, receiver_number, amount, memo=""):
         amount_minor = amount_to_minor_units(amount)
         if sender_number == receiver_number:
             raise BankingError("Sender and receiver must be different accounts.")
@@ -192,12 +196,16 @@ class BankingService:
             "receiver_number": receiver_number,
             "amount_minor": amount_minor,
         }
+        if memo:
+            request["memo"] = memo.strip()
         with self._atomic():
             transaction, replay = self._begin_operation(
                 actor_id, idempotency_key, "TRANSFER", request
             )
             if replay:
                 return self._replayed_result(transaction)
+            if memo:
+                transaction.memo = memo.strip()[:250]
 
             locked_accounts = self.session.scalars(
                 select(Account)
@@ -401,6 +409,7 @@ class BankingService:
                 LedgerTransaction.id.label("transaction_id"),
                 LedgerTransaction.kind.label("kind"),
                 LedgerTransaction.status.label("status"),
+                LedgerTransaction.memo.label("memo"),
                 LedgerTransaction.created_at.label("created_at"),
                 running_balance,
             )

@@ -12,9 +12,9 @@ function isAllowed(path: string, method: string) {
       path === "branches" ||
       path === "metadata/india-states" ||
       path === "accounts" ||
-      path === "branches" ||
-      new RegExp(`^accounts/${ACCOUNT}(?:/balance|/transactions|/statement\\.csv)?$`).test(path) ||
+      new RegExp(`^accounts/${ACCOUNT}(?:/balance|/transactions|/statement|/statement\\.csv)?$`).test(path) ||
       path === "admin/reconciliation" ||
+      path === "admin/audit-logs" ||
       path === "staff"
     );
   }
@@ -22,6 +22,7 @@ function isAllowed(path: string, method: string) {
     return (
       path === "accounts" ||
       path === "transfers" ||
+      path === "auth/change-password" ||
       new RegExp(`^accounts/${ACCOUNT}/(?:deposits|withdrawals|status)$`).test(path) ||
       new RegExp(`^transactions/${UUID}/reversals$`).test(path) ||
       new RegExp(`^staff/${UUID}/password-reset$`).test(path) ||

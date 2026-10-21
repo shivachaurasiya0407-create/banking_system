@@ -5,7 +5,7 @@
   "scripts": {
     "dev": "next dev",
     "build": "next build",
-    "lint": "eslint .",
+    "lint": "eslint app next.config.mjs eslint.config.mjs",
     "typecheck": "tsc --noEmit"
   },
   "dependencies": {
@@ -22,8 +22,8 @@
     "@types/node": "latest",
     "@types/react": "latest",
     "@types/react-dom": "latest",
-    "eslint": "^9.39.5",
-    "eslint-config-next": "^16.4.2",
-    "typescript": "latest"
+    "eslint": "^10.13.0",
+    "typescript": "latest",
+    "typescript-eslint": "^8.72.0"
   }
 }

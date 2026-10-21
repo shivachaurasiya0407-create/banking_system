@@ -88,12 +88,14 @@ class BranchCreateRequest(BaseModel):
 
 class MoneyRequest(BaseModel):
     amount: Annotated[str, Field(min_length=1, max_length=24)]
+    memo: Annotated[str, Field(default="", max_length=250)] = ""
 
 
 class TransferRequest(BaseModel):
     sender_account: AccountNumber
     receiver_account: AccountNumber
     amount: Annotated[str, Field(min_length=1, max_length=24)]
+    memo: Annotated[str, Field(default="", max_length=250)] = ""
 
 
 class AccountStatusRequest(BaseModel):
@@ -119,6 +121,24 @@ class StaffCreateRequest(BaseModel):
     password: Annotated[str, Field(min_length=12, max_length=256)]
 
     @field_validator("password")
+    @classmethod
+    def validate_password(cls, value):
+        if not (
+            any(char.isupper() for char in value)
+            and any(char.islower() for char in value)
+            and any(char.isdigit() for char in value)
+        ):
+            raise ValueError(
+                "Password must include uppercase, lowercase, and numeric characters."
+            )
+        return value
+
+
+class StaffChangePasswordRequest(BaseModel):
+    current_password: Annotated[str, Field(min_length=1, max_length=256)]
+    new_password: Annotated[str, Field(min_length=12, max_length=256)]
+
+    @field_validator("new_password")
     @classmethod
     def validate_password(cls, value):
         if not (

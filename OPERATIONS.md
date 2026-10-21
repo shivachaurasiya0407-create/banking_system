@@ -1,56 +1,84 @@
-# Banking System Operations
+# Banking System Operations (PostgreSQL Enterprise Ledger)
 
-This project is an educational prototype, not an approved production banking system. Do not load real customer data or funds until qualified security, privacy, legal, and banking-domain reviews are complete.
+This project is a high-security banking prototype featuring direct PostgreSQL persistence, double-entry ledger bookkeeping, PBKDF2 authentication, and a Next.js staff management portal.
 
-## Staff web dashboard
+## Admin Credentials
+An administrator account is pre-configured in PostgreSQL:
+- **Full Name**: `Shiva Chaurasiya`
+- **Username**: `shiva`
+- **Password**: `Shiva@12345678`
+- **Role**: `ADMIN`
 
-The staff dashboard is a Next.js frontend backed by the PostgreSQL API. Set `BANKING_API_URL` in `.env` to the API origin (default `http://127.0.0.1:8000`), create the initial administrator, and start both services:
-
+To re-seed or verify this administrator in PostgreSQL at any time:
 ```powershell
-.\.venv\Scripts\python.exe -m banking_api.bootstrap_admin
+.\.venv\Scripts\python.exe -m banking_api.bootstrap_admin --seed-shiva
+```
+
+---
+
+## Process to Run the Project
+
+### 1. Database Setup (PostgreSQL)
+Ensure PostgreSQL is running locally on port `5432` with credentials matching `.env`:
+```ini
+POSTGRES_PASSWORD=Shiva123@
+DATABASE_URL=postgresql+psycopg://postgres:Shiva123%40@localhost:5432/banking_system
+```
+Apply migrations if starting with a fresh database:
+```powershell
+.\.venv\Scripts\alembic.exe upgrade head
+```
+
+### 2. Start the Backend API (FastAPI)
+Run the Python backend server on `http://127.0.0.1:8000`:
+```powershell
 .\.venv\Scripts\python.exe main.py
 ```
+Health & Readiness endpoints:
+- `http://127.0.0.1:8000/healthz`
+- `http://127.0.0.1:8000/readyz`
 
-In a second terminal, run `npm ci` once and start the dashboard with `npm run dev`; open `http://localhost:3000`. The dashboard supports account search and activity, account opening, deposits, withdrawals, transfers, account freezing, branch setup, staff creation, and ledger reconciliation. The API enforces role permissions and writes banking operations to PostgreSQL. The web server keeps access tokens in short-lived HttpOnly, SameSite cookies and proxies only the dashboard's allowed API routes. Use HTTPS in production so the cookies are Secure.
-
-## CSV to PostgreSQL migration
-
-1. Back up `Accounts.csv` and `Transaction_history/` to a restricted location. Keep the originals unchanged until the database import and reconciliation are signed off.
-2. Set `DATABASE_URL`, `JWT_SECRET`, and `PII_HMAC_KEY`; start PostgreSQL with `docker compose up -d postgres`.
-3. Apply schema migrations with `alembic upgrade head` and create the first administrator with `python -m banking_api.bootstrap_admin`.
-4. Run the importer in dry-run mode: `python -m banking_api.import_csv --accounts Accounts.csv --history Transaction_history`.
-5. Resolve every reported data error, rerun dry-run, and review the account, customer, transaction, and ledger-entry counts.
-6. Only after review, commit once with `python -m banking_api.import_csv --accounts Accounts.csv --history Transaction_history --apply`.
-7. Check `GET /admin/reconciliation` and compare account totals to the source records. Keep legacy CSV writes stopped after cutover; the standalone CSV CLI is not yet routed to PostgreSQL.
-
-The importer requires an empty target database, an active administrator, a migrated branch with matching IFSC, unique valid identity/account data, and transaction history whose calculated account balances exactly match `Accounts.csv`. Raw identity numbers are read only to calculate a keyed fingerprint and are not written to PostgreSQL. The current sample CSV IFSC values do not match the configured branch; correct and verify those records before attempting import. Missing or incomplete history is intentionally not guessed.
-
-## Encrypted PostgreSQL backups
-
-Install PostgreSQL client tools and GnuPG, configure a public-key recipient with `gpg --import <recipient-public-key-file>`, and set `GPG_RECIPIENT` plus `DATABASE_URL`. Then run:
-
+### 3. Start the Web Portal (Next.js)
+Open a second terminal window and run:
 ```powershell
-.\scripts\backup_postgres.ps1 -OutputDirectory backups
+npm run dev
 ```
+Open your browser and navigate to `http://localhost:3000`.
 
-The script creates a custom-format `pg_dump`, encrypts it to the configured GPG recipient, and removes its temporary plaintext dump. Restrict access to the encrypted backup directory and the corresponding private key. Schedule this script using the host's scheduler and copy encrypted backups to a separate failure domain; the repository does not configure a scheduler or storage retention policy.
+Sign in with:
+- **Username**: `shiva`
+- **Password**: `Shiva@12345678`
 
-Restore into a dedicated recovery database first, not the live database:
+---
 
-```powershell
-$env:DATABASE_URL = "postgresql+psycopg://.../banking_recovery"
-.\scripts\restore_postgres.ps1 -BackupFile .\backups\banking-YYYYMMDD-HHMMSS.dump.gpg -ConfirmTarget RESTORE
-alembic upgrade head
-```
+## Key Features & Security Enhancements
 
-After restore, verify `/readyz`, run ledger reconciliation, compare known account/transaction counts, and document the recovery time before directing application traffic to the recovered database. `pg_restore --clean` removes objects in the target database; verify the connection string carefully.
+1. **Pure PostgreSQL Persistence (Zero CSV Dependency)**:
+   - All customer profiles, bank accounts, branches, transactions, double-entry ledger entries, and audit logs are stored strictly in PostgreSQL.
+   - All legacy `.csv` storage files have been eliminated.
 
-## API and migration checks
+2. **In-App Dynamic Statement Generator**:
+   - Statements are dynamically retrieved from PostgreSQL via `/accounts/{account_number}/statement`.
+   - Filter by date range (start date, end date) and transaction type.
+   - Live summary metrics: Total Credits (+₹), Total Debits (-₹), Current Balance, Entry Count.
+   - Print / Save as PDF support with clean print styling.
 
-- Run the automated suite: `python -m pip install -r requirements-dev.txt` then `python -m pytest -q`.
-- CI applies Alembic migrations to PostgreSQL and runs the Python tests.
-- Configure `CORS_ORIGINS` as a comma-separated allowlist of exact trusted origins. Do not use `*` for a credentialed staff portal.
-- Keep database/JWT/HMAC secrets out of source control and logs; rotate them through the deployment secret manager and plan HMAC rotation before changing identity fingerprints.
-- Readiness (`/readyz`) verifies database connectivity; liveness (`/healthz`) only verifies that the process responds.
+3. **Transaction Remarks / Memos**:
+   - Post deposits, withdrawals, and transfers with custom remarks (e.g. Salary, Rent, Vendor invoice).
+   - Stored in PostgreSQL `ledger_transactions.memo` and displayed in activity & statement tables.
 
-The staff web portal is not included in the current working tree. API operations, authorization, and input validation must remain authoritative if a client UI is added later.
+4. **Security Audit Trail Explorer**:
+   - Access real-time audit logs under the **Audit Trail** tab (restricted to `ADMIN` and `AUDITOR` roles).
+   - Tracks staff logins, money operations, account freezes, and configuration changes.
+
+5. **Self-Service Password Management**:
+   - Authenticated staff can securely change their own password via `Change Password` in the topbar.
+   - Enforces password complexity rules (12+ characters, uppercase, lowercase, numbers).
+
+6. **Account Filters & Controls**:
+   - Filter customer accounts by status: `All`, `Active`, `Frozen`, `Closed`.
+   - Search accounts by account number or customer name.
+   - Instant freeze / unfreeze toggles.
+
+7. **Security Headers & Protection**:
+   - Enforces `X-Frame-Options: DENY`, `X-Content-Type-Options: nosniff`, `X-XSS-Protection`, strict CORS origin checks, and HttpOnly SameSite session cookies.

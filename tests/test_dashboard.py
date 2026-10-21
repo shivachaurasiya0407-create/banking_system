@@ -187,3 +187,20 @@ def test_teller_cannot_create_branches(dashboard_client):
     )
 
     assert response.status_code == 403
+
+
+def test_audit_logs_endpoint(dashboard_client):
+    client, _, _ = dashboard_client
+    response = client.get("/admin/audit-logs")
+    assert response.status_code == 200
+    assert isinstance(response.json(), list)
+
+
+def test_statement_json_endpoint(dashboard_client):
+    client, _, _ = dashboard_client
+    response = client.get("/accounts/1000000001/statement")
+    assert response.status_code == 200
+    data = response.json()
+    assert data["account_number"] == "1000000001"
+    assert "entries" in data
+    assert "current_balance" in data

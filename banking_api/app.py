@@ -37,6 +37,7 @@ from banking_api.schemas import (
     BranchCreateRequest,
     LoginRequest,
     MoneyRequest,
+    StaffChangePasswordRequest,
     StaffCreateRequest,
     StaffPasswordResetRequest,
     StaffUpdateRequest,
@@ -44,7 +45,7 @@ from banking_api.schemas import (
     TransactionReversalRequest,
     TransferRequest,
 )
-from banking_api.security import hash_password
+from banking_api.security import hash_password, verify_password
 from banking_api.service import BankingError, BankingService, IdempotencyConflict
 from banking_api.settings import Settings
 
@@ -95,6 +96,10 @@ async def request_correlation(request: Request, call_next):
         )
         raise
     response.headers["X-Request-ID"] = request_id
+    response.headers["X-Frame-Options"] = "DENY"
+    response.headers["X-Content-Type-Options"] = "nosniff"
+    response.headers["X-XSS-Protection"] = "1; mode=block"
+    response.headers["Referrer-Policy"] = "strict-origin-when-cross-origin"
     logger.info(
         "Request completed.",
         extra={
@@ -256,6 +261,42 @@ def login(
         expires_in=settings.access_token_minutes * 60,
         role=staff.role,
     )
+
+
+@app.post("/auth/change-password", tags=["authentication"])
+def change_password(
+    body: StaffChangePasswordRequest,
+    actor: Annotated[StaffUser, Depends(get_current_staff)],
+    session: Annotated[Session, Depends(get_db)],
+):
+    target = session.scalar(
+        select(StaffUser).where(StaffUser.id == actor.id).with_for_update()
+    )
+    if target is None:
+        raise HTTPException(status_code=404, detail="Staff user not found.")
+    if not verify_password(body.current_password, target.password_hash):
+        session.add(
+            AuditEvent(
+                actor_id=target.id,
+                action="auth.change_password_failed",
+                entity_type="staff_user",
+                entity_id=str(target.id),
+            )
+        )
+        session.commit()
+        raise HTTPException(status_code=400, detail="Current password is incorrect.")
+    target.password_hash = hash_password(body.new_password)
+    target.token_version += 1
+    session.add(
+        AuditEvent(
+            actor_id=target.id,
+            action="auth.password_changed",
+            entity_type="staff_user",
+            entity_id=str(target.id),
+        )
+    )
+    session.commit()
+    return {"status": "password changed successfully"}
 
 
 @app.post("/staff", status_code=201, tags=["staff"])
@@ -569,9 +610,71 @@ def transactions(
             "credit": f"{max(-entry.amount_minor, 0) / 100:.2f}",
             "debit": f"{max(entry.amount_minor, 0) / 100:.2f}",
             "status": transaction.status,
+            "memo": transaction.memo or "",
         }
         for entry, transaction in rows
     ]
+
+
+@app.get("/accounts/{account_number}/statement", tags=["accounts"])
+def account_statement(
+    account_number: str,
+    actor: Annotated[object, Depends(require_roles("ADMIN", "TELLER", "AUDITOR"))],
+    session: Annotated[Session, Depends(get_db)],
+    settings: Annotated[Settings, Depends(get_settings)],
+    limit: Annotated[int, Query(ge=1, le=10_000)] = 1000,
+    offset: Annotated[int, Query(ge=0)] = 0,
+    start_at: datetime | None = None,
+    end_at: datetime | None = None,
+    kind: Annotated[str | None, Query(pattern=r"^(OPENING_DEPOSIT|DEPOSIT|WITHDRAWAL|TRANSFER|ACCOUNT_STATUS)$")] = None,
+):
+    if start_at is not None and end_at is not None and start_at > end_at:
+        raise HTTPException(status_code=422, detail="start_at must not be after end_at.")
+    account, rows = _service(session, settings).get_statement(
+        account_number,
+        limit=limit,
+        offset=offset,
+        start_at=start_at,
+        end_at=end_at,
+        kind=kind,
+    )
+    customer = session.get(Customer, account.customer_id)
+    session.add(
+        AuditEvent(
+            actor_id=actor.id,
+            action="account.statement_read",
+            entity_type="account",
+            entity_id=str(account.id),
+            metadata_json={"row_count": len(rows)},
+        )
+    )
+    session.commit()
+    entries = [
+        {
+            "transaction_id": str(row.transaction_id),
+            "date": row.created_at.isoformat(),
+            "type": row.kind,
+            "credit": f"{max(-row.amount_minor, 0) / 100:.2f}",
+            "debit": f"{max(row.amount_minor, 0) / 100:.2f}",
+            "running_balance": f"{row.balance_minor / 100:.2f}",
+            "status": row.status,
+            "memo": getattr(row, "memo", "") or "",
+        }
+        for row in rows
+    ]
+    total_credit = sum(max(-row.amount_minor, 0) for row in rows) / 100
+    total_debit = sum(max(row.amount_minor, 0) for row in rows) / 100
+    return {
+        "account_number": account.account_number,
+        "ifsc": account.ifsc,
+        "status": account.status,
+        "current_balance": f"{Decimal(account.balance_minor) / 100:.2f}",
+        "customer_name": f"{customer.first_name} {customer.last_name}" if customer else "N/A",
+        "total_credit": f"{total_credit:.2f}",
+        "total_debit": f"{total_debit:.2f}",
+        "entry_count": len(entries),
+        "entries": entries,
+    }
 
 
 @app.get("/accounts/{account_number}/statement.csv", tags=["accounts"])
@@ -650,6 +753,41 @@ def reconciliation(
     return report
 
 
+@app.get("/admin/audit-logs", tags=["operations"])
+def audit_logs(
+    actor: Annotated[object, Depends(require_roles("ADMIN", "AUDITOR"))],
+    session: Annotated[Session, Depends(get_db)],
+    limit: Annotated[int, Query(ge=1, le=100)] = 50,
+    offset: Annotated[int, Query(ge=0)] = 0,
+    action: Annotated[str | None, Query(max_length=100)] = None,
+):
+    query = (
+        select(AuditEvent, StaffUser.username, StaffUser.full_name)
+        .outerjoin(StaffUser, AuditEvent.actor_id == StaffUser.id)
+    )
+    if action and action.strip():
+        query = query.where(AuditEvent.action.ilike(f"%{action.strip()}%"))
+    query = (
+        query.order_by(AuditEvent.created_at.desc(), AuditEvent.id.desc())
+        .limit(limit)
+        .offset(offset)
+    )
+    rows = session.execute(query).all()
+    return [
+        {
+            "id": event.id,
+            "actor_username": username or "System",
+            "actor_name": full_name or "System",
+            "action": event.action,
+            "entity_type": event.entity_type,
+            "entity_id": event.entity_id,
+            "metadata": event.metadata_json,
+            "created_at": event.created_at.isoformat(),
+        }
+        for event, username, full_name in rows
+    ]
+
+
 @app.post("/transactions/{transaction_id}/reversals", tags=["operations"])
 def reverse_transaction(
     transaction_id: uuid.UUID,
@@ -675,7 +813,7 @@ def deposit(
     settings: Annotated[Settings, Depends(get_settings)],
 ):
     result = _service(session, settings).change_balance(
-        actor.id, idempotency_key, account_number, "DEPOSIT", body.amount
+        actor.id, idempotency_key, account_number, "DEPOSIT", body.amount, body.memo
     )
     return _operation_response(result)
 
@@ -690,7 +828,7 @@ def withdrawal(
     settings: Annotated[Settings, Depends(get_settings)],
 ):
     result = _service(session, settings).change_balance(
-        actor.id, idempotency_key, account_number, "WITHDRAWAL", body.amount
+        actor.id, idempotency_key, account_number, "WITHDRAWAL", body.amount, body.memo
     )
     return _operation_response(result)
 
@@ -709,6 +847,7 @@ def transfer(
         body.sender_account,
         body.receiver_account,
         body.amount,
+        body.memo,
     )
     return _operation_response(result)
 
