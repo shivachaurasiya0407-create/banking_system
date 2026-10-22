@@ -1,18 +1,23 @@
-# Banking System Operations (PostgreSQL Enterprise Ledger)
+# Banking System Operations (Educational Prototype)
 
-This project is a high-security banking prototype featuring direct PostgreSQL persistence, double-entry ledger bookkeeping, PBKDF2 authentication, and a Next.js staff management portal.
+This is an educational banking operations prototype with PostgreSQL persistence, a double-entry ledger, staff authentication, and a Next.js management portal. It is not a licensed bank and is not approved to hold real customer data or move real funds. Use synthetic data only. It has no external bank/payment-provider integration.
 
 ## Admin Credentials
-An administrator account is pre-configured in PostgreSQL:
+Create the initial administrator in PostgreSQL:
 - **Full Name**: `Shiva Chaurasiya`
 - **Username**: `shiva`
-- **Password**: `Shiva@12345678`
+- **Initial password**: `shiva@12345678`
 - **Role**: `ADMIN`
 
-To re-seed or verify this administrator in PostgreSQL at any time:
+The seed command only creates the administrator if it does not already exist. It does not seed employee or customer accounts, and it will not overwrite an existing admin password. To create the admin:
 ```powershell
 .\.venv\Scripts\python.exe -m banking_api.bootstrap_admin --seed-shiva
 ```
+To intentionally reset the existing admin password back to the initial password, run:
+```powershell
+.\.venv\Scripts\python.exe -m banking_api.bootstrap_admin --reset-shiva
+```
+Change the initial password after signing in. Passwords must be at least 12 characters. Do not reuse this study-project credential anywhere else.
 
 ---
 
@@ -47,7 +52,7 @@ Open your browser and navigate to `http://localhost:3000`.
 
 Sign in with:
 - **Username**: `shiva`
-- **Password**: `Shiva@12345678`
+- **Initial password**: `shiva@12345678`
 
 ---
 
@@ -73,7 +78,7 @@ Sign in with:
 
 5. **Self-Service Password Management**:
    - Authenticated staff can securely change their own password via `Change Password` in the topbar.
-   - Enforces password complexity rules (12+ characters, uppercase, lowercase, numbers).
+   - Requires passwords to be 12–256 characters; long passphrases are accepted without character-composition rules.
 
 6. **Account Filters & Controls**:
    - Filter customer accounts by status: `All`, `Active`, `Frozen`, `Closed`.
