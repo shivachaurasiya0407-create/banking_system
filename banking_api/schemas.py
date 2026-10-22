@@ -120,53 +120,14 @@ class StaffCreateRequest(BaseModel):
     role: Annotated[str, Field(pattern=r"^(ADMIN|TELLER|AUDITOR)$")]
     password: Annotated[str, Field(min_length=12, max_length=256)]
 
-    @field_validator("password")
-    @classmethod
-    def validate_password(cls, value):
-        if not (
-            any(char.isupper() for char in value)
-            and any(char.islower() for char in value)
-            and any(char.isdigit() for char in value)
-        ):
-            raise ValueError(
-                "Password must include uppercase, lowercase, and numeric characters."
-            )
-        return value
-
 
 class StaffChangePasswordRequest(BaseModel):
     current_password: Annotated[str, Field(min_length=1, max_length=256)]
     new_password: Annotated[str, Field(min_length=12, max_length=256)]
 
-    @field_validator("new_password")
-    @classmethod
-    def validate_password(cls, value):
-        if not (
-            any(char.isupper() for char in value)
-            and any(char.islower() for char in value)
-            and any(char.isdigit() for char in value)
-        ):
-            raise ValueError(
-                "Password must include uppercase, lowercase, and numeric characters."
-            )
-        return value
-
 
 class StaffPasswordResetRequest(BaseModel):
     password: Annotated[str, Field(min_length=12, max_length=256)]
-
-    @field_validator("password")
-    @classmethod
-    def validate_password(cls, value):
-        if not (
-            any(char.isupper() for char in value)
-            and any(char.islower() for char in value)
-            and any(char.isdigit() for char in value)
-        ):
-            raise ValueError(
-                "Password must include uppercase, lowercase, and numeric characters."
-            )
-        return value
 
 
 class StaffUpdateRequest(BaseModel):

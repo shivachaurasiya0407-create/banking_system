@@ -10,13 +10,22 @@ from banking_api.models import StaffUser
 from banking_api.security import hash_password
 from banking_api.settings import Settings
 
+DEFAULT_ADMIN_PASSWORD = "shiva@12345678"
+
+
+def validate_password(password):
+    if len(password) < 12 or len(password) > 256:
+        raise SystemExit("Password must be between 12 and 256 characters.")
+
 
 def main():
     parser = argparse.ArgumentParser(description="Bootstrap Administrator for Banking System")
-    parser.add_argument(
-        "--seed-shiva",
-        action="store_true",
-        help="Seed default admin 'shiva' (Shiva Chaurasiya)",
+    admin_action = parser.add_mutually_exclusive_group()
+    admin_action.add_argument(
+        "--seed-shiva", action="store_true", help="Create the initial Shiva admin if absent"
+    )
+    admin_action.add_argument(
+        "--reset-shiva", action="store_true", help="Explicitly reset the Shiva admin password"
     )
     parser.add_argument("--username", help="Administrator username")
     parser.add_argument("--full-name", help="Administrator full name")
@@ -27,13 +36,20 @@ def main():
     engine = configure_database(settings)
 
     with Session(engine) as session:
-        if args.seed_shiva:
+        if args.seed_shiva or args.reset_shiva:
             username = "shiva"
             full_name = "Shiva Chaurasiya"
-            password = args.password or "Shiva@12345678"
             existing = session.scalar(
                 select(StaffUser).where(StaffUser.username == username)
             )
+            if args.seed_shiva and existing:
+                print("Administrator 'shiva' already exists; no changes were made.")
+                return
+            if args.reset_shiva and existing is None:
+                raise SystemExit("Administrator 'shiva' does not exist; run --seed-shiva first.")
+
+            password = args.password or DEFAULT_ADMIN_PASSWORD
+            validate_password(password)
             if existing:
                 existing.full_name = full_name
                 existing.password_hash = hash_password(password)
@@ -86,16 +102,7 @@ def main():
 
         if not full_name or not username:
             raise SystemExit("Full name and username are required.")
-        if (
-            len(password) < 12
-            or not any(char.isupper() for char in password)
-            or not any(char.islower() for char in password)
-            or not any(char.isdigit() for char in password)
-        ):
-            raise SystemExit(
-                "Password must be at least 12 characters and include "
-                "uppercase, lowercase, and numeric characters."
-            )
+        validate_password(password)
 
         existing = session.scalar(
             select(StaffUser).where(StaffUser.username == username)

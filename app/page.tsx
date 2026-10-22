@@ -812,7 +812,7 @@ export default function Home() {
                   <label>Full name<input value={newName} onChange={(event) => setNewName(event.target.value)} required /></label>
                   <label>Username<input minLength={3} value={newUsername} onChange={(event) => setNewUsername(event.target.value)} required /></label>
                   <label>Role<select value={newRole} onChange={(event) => setNewRole(event.target.value as "TELLER" | "AUDITOR")}><option value="TELLER">Teller</option><option value="AUDITOR">Auditor</option></select></label>
-                  <label>Initial password<input type="password" minLength={12} value={newPassword} onChange={(event) => setNewPassword(event.target.value)} placeholder="12+ chars with upper, lower, number" required /></label>
+                  <label>Initial password<input type="password" minLength={12} value={newPassword} onChange={(event) => setNewPassword(event.target.value)} placeholder="At least 12 characters" required /></label>
                   <button disabled={busy}>Create staff member</button>
                 </form>
               </article>
@@ -1062,7 +1062,7 @@ export default function Home() {
                   minLength={12}
                   value={newPasswordInput}
                   onChange={(e) => setNewPasswordInput(e.target.value)}
-                  placeholder="12+ chars with uppercase, lowercase, number"
+                  placeholder="At least 12 characters"
                   required
                 />
               </label>
