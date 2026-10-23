@@ -15,21 +15,35 @@ function isAllowed(path: string, method: string) {
       new RegExp(`^accounts/${ACCOUNT}(?:/balance|/transactions|/statement|/statement\\.csv)?$`).test(path) ||
       path === "admin/reconciliation" ||
       path === "admin/audit-logs" ||
-      path === "staff"
+      path === "admin/notifications" ||
+      path === "staff" ||
+      path === "loans" ||
+      path === "fixed-deposits" ||
+      new RegExp(`^loans/${UUID}$`).test(path)
     );
   }
   if (method === "POST") {
     return (
       path === "accounts" ||
+      path === "branches" ||
       path === "transfers" ||
+      path === "loans" ||
+      path === "fixed-deposits" ||
       path === "auth/change-password" ||
       new RegExp(`^accounts/${ACCOUNT}/(?:deposits|withdrawals|status)$`).test(path) ||
+      new RegExp(`^accounts/${ACCOUNT}/interest$`).test(path) ||
       new RegExp(`^transactions/${UUID}/reversals$`).test(path) ||
       new RegExp(`^staff/${UUID}/password-reset$`).test(path) ||
+      new RegExp(`^loans/${UUID}/(?:action|repayments)$`).test(path) ||
+      new RegExp(`^fixed-deposits/${UUID}/close$`).test(path) ||
       path === "staff"
     );
   }
-  return method === "PATCH" && new RegExp(`^staff/${UUID}$`).test(path);
+  return (
+    method === "PATCH" &&
+    (new RegExp(`^staff/${UUID}$`).test(path) ||
+      new RegExp(`^customers/${UUID}/(?:kyc|profile)$`).test(path))
+  );
 }
 
 async function proxy(

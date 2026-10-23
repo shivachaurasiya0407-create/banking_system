@@ -111,6 +111,13 @@ def test_dashboard_summary_reads_live_database_counts(dashboard_client):
         "accounts": {"total": 2, "active": 1, "frozen": 1, "closed": 0},
         "total_balance": "3505.00",
         "transactions": 0,
+        "loans": {
+            "active": 0,
+            "applied": 0,
+            "approved": 0,
+            "outstanding": "0.00",
+        },
+        "fixed_deposits": {"active": 0, "total_value": "0.00"},
     }
 
 

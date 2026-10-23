@@ -28,13 +28,24 @@ from banking_api.models import (
     AuditEvent,
     Branch,
     Customer,
+    FixedDeposit,
+    Loan,
+    LoanRepayment,
     LedgerTransaction,
+    NotificationLog,
     StaffUser,
 )
 from banking_api.schemas import (
     AccountOpenRequest,
     AccountStatusRequest,
     BranchCreateRequest,
+    CustomerKycRequest,
+    CustomerUpdateRequest,
+    FixedDepositCloseRequest,
+    FixedDepositOpenRequest,
+    LoanActionRequest,
+    LoanApplicationRequest,
+    LoanRepaymentRequest,
     LoginRequest,
     MoneyRequest,
     StaffChangePasswordRequest,
@@ -51,10 +62,11 @@ from banking_api.settings import Settings
 
 logger = logging.getLogger("banking_api")
 app = FastAPI(
-    title="Banking System Prototype API",
-    version="1.0.0",
+    title="SHIVA Banking System API",
+    version="2.0.0",
     description=(
-        "Educational banking prototype. Not approved for real customer data or funds."
+        "Full-featured banking system with accounts, loans, fixed deposits, "
+        "interest engine, KYC, audit trail, and notification log."
     ),
 )
 app.add_middleware(
@@ -134,6 +146,8 @@ async def integrity_error_handler(request: Request, error: IntegrityError):
     )
 
 
+# ─── System ───────────────────────────────────────────────────────────────────
+
 @app.get("/healthz", tags=["system"])
 def health():
     return {"status": "ok"}
@@ -142,10 +156,11 @@ def health():
 @app.get("/readyz", tags=["system"])
 def readiness(session: Annotated[Session, Depends(get_db)]):
     from sqlalchemy import text
-
     session.execute(text("SELECT 1"))
     return {"status": "ready"}
 
+
+# ─── Authentication ───────────────────────────────────────────────────────────
 
 @app.get("/auth/me", tags=["authentication"])
 def current_staff(actor: Annotated[StaffUser, Depends(get_current_staff)]):
@@ -155,91 +170,6 @@ def current_staff(actor: Annotated[StaffUser, Depends(get_current_staff)]):
         "full_name": actor.full_name,
         "role": actor.role,
     }
-
-
-@app.get("/dashboard/summary", tags=["dashboard"])
-def dashboard_summary(
-    actor: Annotated[StaffUser, Depends(require_roles("ADMIN", "TELLER", "AUDITOR"))],
-    session: Annotated[Session, Depends(get_db)],
-):
-    counts = dict(
-        session.execute(
-            select(Account.status, func.count(Account.id)).group_by(Account.status)
-        ).all()
-    )
-    total_balance_minor = session.scalar(
-        select(func.coalesce(func.sum(Account.balance_minor), 0))
-    )
-    transaction_count = session.scalar(
-        select(func.count()).select_from(LedgerTransaction)
-    )
-    session.add(
-        AuditEvent(
-            actor_id=actor.id,
-            action="dashboard.summary_read",
-            entity_type="dashboard",
-            entity_id="summary",
-        )
-    )
-    session.commit()
-    return {
-        "accounts": {
-            "total": sum(counts.values()),
-            "active": counts.get("ACTIVE", 0),
-            "frozen": counts.get("FROZEN", 0),
-            "closed": counts.get("CLOSED", 0),
-        },
-        "total_balance": f"{Decimal(total_balance_minor or 0) / 100:.2f}",
-        "transactions": transaction_count,
-    }
-
-
-@app.get("/branches", tags=["branches"])
-def list_branches(
-    actor: Annotated[StaffUser, Depends(require_roles("ADMIN", "TELLER", "AUDITOR"))],
-    session: Annotated[Session, Depends(get_db)],
-):
-    branches = [
-        {"ifsc": branch.ifsc, "name": branch.name}
-        for branch in session.scalars(select(Branch).order_by(Branch.name, Branch.ifsc))
-    ]
-    session.add(
-        AuditEvent(
-            actor_id=actor.id,
-            action="branch.list",
-            entity_type="branch",
-            entity_id="collection",
-        )
-    )
-    session.commit()
-    return branches
-
-
-@app.get("/metadata/india-states", tags=["metadata"])
-def list_india_states():
-    return list(INDIA_STATES)
-
-
-@app.post("/branches", status_code=201, tags=["branches"])
-def create_branch(
-    body: BranchCreateRequest,
-    actor: Annotated[StaffUser, Depends(require_roles("ADMIN"))],
-    session: Annotated[Session, Depends(get_db)],
-):
-    if session.get(Branch, body.ifsc) is not None:
-        raise HTTPException(status_code=409, detail="A branch with this IFSC already exists.")
-    branch = Branch(ifsc=body.ifsc, name=body.name.strip(), next_sequence=1)
-    session.add(branch)
-    session.add(
-        AuditEvent(
-            actor_id=actor.id,
-            action="branch.create",
-            entity_type="branch",
-            entity_id=branch.ifsc,
-        )
-    )
-    session.commit()
-    return {"ifsc": branch.ifsc, "name": branch.name}
 
 
 @app.post("/auth/login", response_model=TokenResponse, tags=["authentication"])
@@ -298,6 +228,127 @@ def change_password(
     session.commit()
     return {"status": "password changed successfully"}
 
+
+# ─── Dashboard ────────────────────────────────────────────────────────────────
+
+@app.get("/dashboard/summary", tags=["dashboard"])
+def dashboard_summary(
+    actor: Annotated[StaffUser, Depends(require_roles("ADMIN", "TELLER", "AUDITOR"))],
+    session: Annotated[Session, Depends(get_db)],
+):
+    counts = dict(
+        session.execute(
+            select(Account.status, func.count(Account.id)).group_by(Account.status)
+        ).all()
+    )
+    total_balance_minor = session.scalar(
+        select(func.coalesce(func.sum(Account.balance_minor), 0))
+    )
+    transaction_count = session.scalar(
+        select(func.count()).select_from(LedgerTransaction)
+    )
+    # Loan summary
+    loan_counts = dict(
+        session.execute(
+            select(Loan.status, func.count(Loan.id)).group_by(Loan.status)
+        ).all()
+    )
+    active_loans_outstanding = session.scalar(
+        select(func.coalesce(func.sum(Loan.outstanding_minor), 0)).where(
+            Loan.status == "ACTIVE"
+        )
+    ) or 0
+    # FD summary
+    active_fd_count = session.scalar(
+        select(func.count(FixedDeposit.id)).where(FixedDeposit.status == "ACTIVE")
+    ) or 0
+    active_fd_value = session.scalar(
+        select(func.coalesce(func.sum(FixedDeposit.principal_minor), 0)).where(
+            FixedDeposit.status == "ACTIVE"
+        )
+    ) or 0
+    session.add(
+        AuditEvent(
+            actor_id=actor.id,
+            action="dashboard.summary_read",
+            entity_type="dashboard",
+            entity_id="summary",
+        )
+    )
+    session.commit()
+    return {
+        "accounts": {
+            "total": sum(counts.values()),
+            "active": counts.get("ACTIVE", 0),
+            "frozen": counts.get("FROZEN", 0),
+            "closed": counts.get("CLOSED", 0),
+        },
+        "total_balance": f"{Decimal(total_balance_minor or 0) / 100:.2f}",
+        "transactions": transaction_count,
+        "loans": {
+            "active": loan_counts.get("ACTIVE", 0),
+            "applied": loan_counts.get("APPLIED", 0),
+            "approved": loan_counts.get("APPROVED", 0),
+            "outstanding": f"{Decimal(active_loans_outstanding) / 100:.2f}",
+        },
+        "fixed_deposits": {
+            "active": active_fd_count,
+            "total_value": f"{Decimal(active_fd_value) / 100:.2f}",
+        },
+    }
+
+
+# ─── Branches ─────────────────────────────────────────────────────────────────
+
+@app.get("/branches", tags=["branches"])
+def list_branches(
+    actor: Annotated[StaffUser, Depends(require_roles("ADMIN", "TELLER", "AUDITOR"))],
+    session: Annotated[Session, Depends(get_db)],
+):
+    branches = [
+        {"ifsc": branch.ifsc, "name": branch.name}
+        for branch in session.scalars(select(Branch).order_by(Branch.name, Branch.ifsc))
+    ]
+    session.add(
+        AuditEvent(
+            actor_id=actor.id,
+            action="branch.list",
+            entity_type="branch",
+            entity_id="collection",
+        )
+    )
+    session.commit()
+    return branches
+
+
+@app.get("/metadata/india-states", tags=["metadata"])
+def list_india_states():
+    return list(INDIA_STATES)
+
+
+@app.post("/branches", status_code=201, tags=["branches"])
+def create_branch(
+    body: BranchCreateRequest,
+    actor: Annotated[StaffUser, Depends(require_roles("ADMIN"))],
+    session: Annotated[Session, Depends(get_db)],
+):
+    if session.get(Branch, body.ifsc) is not None:
+        raise HTTPException(status_code=409, detail="A branch with this IFSC already exists.")
+    branch = Branch(ifsc=body.ifsc, name=body.name.strip(), next_sequence=1)
+    session.add(branch)
+    session.add(
+        AuditEvent(
+            actor_id=actor.id,
+            action="branch.create",
+            entity_type="branch",
+            entity_id=branch.ifsc,
+        )
+    )
+    session.commit()
+    return {"ifsc": branch.ifsc, "name": branch.name}
+
+
+# ─── Staff ────────────────────────────────────────────────────────────────────
 
 @app.post("/staff", status_code=201, tags=["staff"])
 def create_staff(
@@ -442,6 +493,8 @@ def update_staff(
     }
 
 
+# ─── Accounts ─────────────────────────────────────────────────────────────────
+
 @app.post("/accounts", status_code=201, tags=["accounts"])
 def open_account(
     body: AccountOpenRequest,
@@ -456,6 +509,7 @@ def open_account(
         body.customer.model_dump(),
         body.opening_deposit,
         body.branch_ifsc,
+        body.account_type,
     )
     return _operation_response(result)
 
@@ -465,6 +519,8 @@ def search_accounts(
     actor: Annotated[object, Depends(require_roles("ADMIN", "TELLER", "AUDITOR"))],
     session: Annotated[Session, Depends(get_db)],
     q: Annotated[str | None, Query(min_length=1, max_length=100)] = None,
+    status_filter: Annotated[str | None, Query(alias="status")] = None,
+    account_type: Annotated[str | None, Query()] = None,
     limit: Annotated[int, Query(ge=1, le=100)] = 50,
     offset: Annotated[int, Query(ge=0)] = 0,
 ):
@@ -480,6 +536,10 @@ def search_accounts(
                 Customer.last_name.startswith(search, autoescape=True),
             )
         )
+    if status_filter and status_filter in {"ACTIVE", "FROZEN", "CLOSED"}:
+        statement = statement.where(Account.status == status_filter)
+    if account_type and account_type in {"SAVINGS", "CURRENT", "SALARY"}:
+        statement = statement.where(Account.account_type == account_type)
     results = session.execute(
         statement.order_by(Account.account_number).limit(limit).offset(offset)
     ).all()
@@ -497,10 +557,13 @@ def search_accounts(
         "items": [
             {
                 "account_number": account.account_number,
+                "account_type": account.account_type,
                 "ifsc": account.ifsc,
                 "status": account.status,
                 "balance": f"{Decimal(account.balance_minor) / 100:.2f}",
                 "customer_name": f"{customer.first_name} {customer.last_name}",
+                "interest_rate": str(account.interest_rate_annual),
+                "kyc_status": customer.kyc_status,
             }
             for account, customer in results
         ],
@@ -536,14 +599,26 @@ def account_details(
         "id": str(customer.id),
         "first_name": customer.first_name,
         "last_name": customer.last_name,
+        "kyc_status": customer.kyc_status,
+        "address_city": customer.address_city,
     }
     if actor.role in {"ADMIN", "TELLER"}:
         customer_response["phone"] = customer.phone
+        customer_response["email"] = customer.email
+        customer_response["address_line1"] = customer.address_line1
+        customer_response["address_pin"] = customer.address_pin
     return {
         "account_number": account.account_number,
+        "account_type": account.account_type,
         "ifsc": account.ifsc,
         "status": account.status,
         "balance": f"{Decimal(account.balance_minor) / 100:.2f}",
+        "interest_rate_annual": str(account.interest_rate_annual),
+        "daily_withdrawal_limit": (
+            f"{Decimal(account.daily_withdrawal_limit_minor) / 100:.2f}"
+            if account.daily_withdrawal_limit_minor > 0
+            else "No limit"
+        ),
         "customer": customer_response,
     }
 
@@ -568,7 +643,12 @@ def balance(
         )
     )
     session.commit()
-    return {"account_number": account.account_number, "balance": f"{Decimal(account.balance_minor) / 100:.2f}", "status": account.status}
+    return {
+        "account_number": account.account_number,
+        "account_type": account.account_type,
+        "balance": f"{Decimal(account.balance_minor) / 100:.2f}",
+        "status": account.status,
+    }
 
 
 @app.get("/accounts/{account_number}/transactions", tags=["accounts"])
@@ -581,7 +661,7 @@ def transactions(
     offset: Annotated[int, Query(ge=0)] = 0,
     start_at: datetime | None = None,
     end_at: datetime | None = None,
-    kind: Annotated[str | None, Query(pattern=r"^(OPENING_DEPOSIT|DEPOSIT|WITHDRAWAL|TRANSFER|ACCOUNT_STATUS)$")] = None,
+    kind: Annotated[str | None, Query(pattern=r"^(OPENING_DEPOSIT|DEPOSIT|WITHDRAWAL|TRANSFER|ACCOUNT_STATUS|INTEREST|LOAN_DISBURSEMENT|LOAN_REPAYMENT|FD_OPEN|FD_MATURITY|FD_PREMATURE_CLOSURE)$")] = None,
 ):
     account = session.scalar(
         select(Account).where(Account.account_number == account_number)
@@ -626,17 +706,12 @@ def account_statement(
     offset: Annotated[int, Query(ge=0)] = 0,
     start_at: datetime | None = None,
     end_at: datetime | None = None,
-    kind: Annotated[str | None, Query(pattern=r"^(OPENING_DEPOSIT|DEPOSIT|WITHDRAWAL|TRANSFER|ACCOUNT_STATUS)$")] = None,
+    kind: Annotated[str | None, Query(pattern=r"^(OPENING_DEPOSIT|DEPOSIT|WITHDRAWAL|TRANSFER|ACCOUNT_STATUS|INTEREST|LOAN_DISBURSEMENT|LOAN_REPAYMENT|FD_OPEN|FD_MATURITY|FD_PREMATURE_CLOSURE)$")] = None,
 ):
     if start_at is not None and end_at is not None and start_at > end_at:
         raise HTTPException(status_code=422, detail="start_at must not be after end_at.")
     account, rows = _service(session, settings).get_statement(
-        account_number,
-        limit=limit,
-        offset=offset,
-        start_at=start_at,
-        end_at=end_at,
-        kind=kind,
+        account_number, limit=limit, offset=offset, start_at=start_at, end_at=end_at, kind=kind,
     )
     customer = session.get(Customer, account.customer_id)
     session.add(
@@ -666,6 +741,7 @@ def account_statement(
     total_debit = sum(max(row.amount_minor, 0) for row in rows) / 100
     return {
         "account_number": account.account_number,
+        "account_type": account.account_type,
         "ifsc": account.ifsc,
         "status": account.status,
         "current_balance": f"{Decimal(account.balance_minor) / 100:.2f}",
@@ -687,23 +763,18 @@ def export_statement(
     offset: Annotated[int, Query(ge=0)] = 0,
     start_at: datetime | None = None,
     end_at: datetime | None = None,
-    kind: Annotated[str | None, Query(pattern=r"^(OPENING_DEPOSIT|DEPOSIT|WITHDRAWAL|TRANSFER|ACCOUNT_STATUS)$")] = None,
+    kind: Annotated[str | None, Query(pattern=r"^(OPENING_DEPOSIT|DEPOSIT|WITHDRAWAL|TRANSFER|ACCOUNT_STATUS|INTEREST|LOAN_DISBURSEMENT|LOAN_REPAYMENT|FD_OPEN|FD_MATURITY|FD_PREMATURE_CLOSURE)$")] = None,
 ):
     if start_at is not None and end_at is not None and start_at > end_at:
         raise HTTPException(status_code=422, detail="start_at must not be after end_at.")
     account, rows = _service(session, settings).get_statement(
-        account_number,
-        limit=limit,
-        offset=offset,
-        start_at=start_at,
-        end_at=end_at,
-        kind=kind,
+        account_number, limit=limit, offset=offset, start_at=start_at, end_at=end_at, kind=kind,
     )
     output = io.StringIO(newline="")
     writer = csv.writer(output)
     writer.writerow((
         "account_number", "transaction_id", "date", "type", "credit", "debit",
-        "running_balance", "status",
+        "running_balance", "status", "memo",
     ))
     for row in rows:
         writer.writerow((
@@ -715,6 +786,7 @@ def export_statement(
             f"{max(row.amount_minor, 0) / 100:.2f}",
             f"{row.balance_minor / 100:.2f}",
             row.status,
+            getattr(row, "memo", "") or "",
         ))
     session.add(
         AuditEvent(
@@ -733,75 +805,80 @@ def export_statement(
     )
 
 
-@app.get("/admin/reconciliation", tags=["operations"])
-def reconciliation(
-    actor: Annotated[object, Depends(require_roles("ADMIN", "AUDITOR"))],
+# ─── Customer KYC & Profile ───────────────────────────────────────────────────
+
+@app.patch("/customers/{customer_id}/kyc", tags=["customers"])
+def update_kyc(
+    customer_id: uuid.UUID,
+    body: CustomerKycRequest,
+    actor: Annotated[object, Depends(require_roles("ADMIN"))],
     session: Annotated[Session, Depends(get_db)],
-    settings: Annotated[Settings, Depends(get_settings)],
 ):
-    report = _service(session, settings).reconcile_ledger()
+    customer = session.scalar(
+        select(Customer).where(Customer.id == customer_id).with_for_update()
+    )
+    if customer is None:
+        raise HTTPException(status_code=404, detail="Customer not found.")
+    previous_status = customer.kyc_status
+    customer.kyc_status = body.kyc_status
     session.add(
         AuditEvent(
             actor_id=actor.id,
-            action="ledger.reconciliation",
-            entity_type="ledger",
-            entity_id="all",
-            metadata_json={"balanced": report["balanced"], "discrepancy_count": len(report["discrepancies"])},
+            action="customer.kyc_updated",
+            entity_type="customer",
+            entity_id=str(customer.id),
+            metadata_json={"previous": previous_status, "new": body.kyc_status},
         )
     )
     session.commit()
-    return report
+    return {
+        "customer_id": str(customer.id),
+        "kyc_status": customer.kyc_status,
+    }
 
 
-@app.get("/admin/audit-logs", tags=["operations"])
-def audit_logs(
-    actor: Annotated[object, Depends(require_roles("ADMIN", "AUDITOR"))],
+@app.patch("/customers/{customer_id}/profile", tags=["customers"])
+def update_customer_profile(
+    customer_id: uuid.UUID,
+    body: CustomerUpdateRequest,
+    actor: Annotated[object, Depends(require_roles("ADMIN", "TELLER"))],
     session: Annotated[Session, Depends(get_db)],
-    limit: Annotated[int, Query(ge=1, le=100)] = 50,
-    offset: Annotated[int, Query(ge=0)] = 0,
-    action: Annotated[str | None, Query(max_length=100)] = None,
 ):
-    query = (
-        select(AuditEvent, StaffUser.username, StaffUser.full_name)
-        .outerjoin(StaffUser, AuditEvent.actor_id == StaffUser.id)
+    customer = session.scalar(
+        select(Customer).where(Customer.id == customer_id).with_for_update()
     )
-    if action and action.strip():
-        query = query.where(AuditEvent.action.ilike(f"%{action.strip()}%"))
-    query = (
-        query.order_by(AuditEvent.created_at.desc(), AuditEvent.id.desc())
-        .limit(limit)
-        .offset(offset)
+    if customer is None:
+        raise HTTPException(status_code=404, detail="Customer not found.")
+    if body.phone is not None:
+        customer.phone = body.phone
+    if body.email is not None:
+        customer.email = body.email
+    if body.address_line1 is not None:
+        customer.address_line1 = body.address_line1
+    if body.address_city is not None:
+        customer.address_city = body.address_city
+    if body.address_pin is not None:
+        customer.address_pin = body.address_pin
+    session.add(
+        AuditEvent(
+            actor_id=actor.id,
+            action="customer.profile_updated",
+            entity_type="customer",
+            entity_id=str(customer.id),
+        )
     )
-    rows = session.execute(query).all()
-    return [
-        {
-            "id": event.id,
-            "actor_username": username or "System",
-            "actor_name": full_name or "System",
-            "action": event.action,
-            "entity_type": event.entity_type,
-            "entity_id": event.entity_id,
-            "metadata": event.metadata_json,
-            "created_at": event.created_at.isoformat(),
-        }
-        for event, username, full_name in rows
-    ]
+    session.commit()
+    return {
+        "customer_id": str(customer.id),
+        "phone": customer.phone,
+        "email": customer.email,
+        "address_line1": customer.address_line1,
+        "address_city": customer.address_city,
+        "address_pin": customer.address_pin,
+    }
 
 
-@app.post("/transactions/{transaction_id}/reversals", tags=["operations"])
-def reverse_transaction(
-    transaction_id: uuid.UUID,
-    body: TransactionReversalRequest,
-    idempotency_key: Annotated[str, Header(alias="Idempotency-Key")],
-    actor: Annotated[object, Depends(require_roles("ADMIN"))],
-    session: Annotated[Session, Depends(get_db)],
-    settings: Annotated[Settings, Depends(get_settings)],
-):
-    result = _service(session, settings).reverse_transaction(
-        actor.id, idempotency_key, transaction_id, body.reason
-    )
-    return _operation_response(result)
-
+# ─── Cash Operations ──────────────────────────────────────────────────────────
 
 @app.post("/accounts/{account_number}/deposits", tags=["operations"])
 def deposit(
@@ -842,12 +919,8 @@ def transfer(
     settings: Annotated[Settings, Depends(get_settings)],
 ):
     result = _service(session, settings).transfer(
-        actor.id,
-        idempotency_key,
-        body.sender_account,
-        body.receiver_account,
-        body.amount,
-        body.memo,
+        actor.id, idempotency_key,
+        body.sender_account, body.receiver_account, body.amount, body.memo,
     )
     return _operation_response(result)
 
@@ -865,3 +938,343 @@ def set_account_status(
         actor.id, idempotency_key, account_number, body.status
     )
     return _operation_response(result)
+
+
+@app.post("/transactions/{transaction_id}/reversals", tags=["operations"])
+def reverse_transaction(
+    transaction_id: uuid.UUID,
+    body: TransactionReversalRequest,
+    idempotency_key: Annotated[str, Header(alias="Idempotency-Key")],
+    actor: Annotated[object, Depends(require_roles("ADMIN"))],
+    session: Annotated[Session, Depends(get_db)],
+    settings: Annotated[Settings, Depends(get_settings)],
+):
+    result = _service(session, settings).reverse_transaction(
+        actor.id, idempotency_key, transaction_id, body.reason
+    )
+    return _operation_response(result)
+
+
+# ─── Interest Engine ──────────────────────────────────────────────────────────
+
+@app.post("/accounts/{account_number}/interest", tags=["interest"])
+def post_interest(
+    account_number: str,
+    idempotency_key: Annotated[str, Header(alias="Idempotency-Key")],
+    actor: Annotated[object, Depends(require_roles("ADMIN"))],
+    session: Annotated[Session, Depends(get_db)],
+    settings: Annotated[Settings, Depends(get_settings)],
+    period_month: Annotated[str, Query(pattern=r"^\d{4}-(?:0[1-9]|1[0-2])$")],
+):
+    """Post monthly savings interest to a savings/salary account."""
+    result = _service(session, settings).post_monthly_interest(
+        actor.id, idempotency_key, account_number, period_month
+    )
+    return _operation_response(result)
+
+
+# ─── Loans ────────────────────────────────────────────────────────────────────
+
+@app.post("/loans", status_code=201, tags=["loans"])
+def apply_loan(
+    body: LoanApplicationRequest,
+    actor: Annotated[object, Depends(require_roles("ADMIN", "TELLER"))],
+    session: Annotated[Session, Depends(get_db)],
+    settings: Annotated[Settings, Depends(get_settings)],
+):
+    """Submit a new loan application."""
+    loan = _service(session, settings).apply_loan(
+        actor.id,
+        body.account_number,
+        body.loan_type,
+        body.principal_amount,
+        body.interest_rate_annual,
+        body.tenure_months,
+        body.memo,
+    )
+    session.commit()
+    return {
+        "loan_id": str(loan.id),
+        "status": loan.status,
+        "emi_minor": loan.emi_minor,
+        "emi": f"{loan.emi_minor / 100:.2f}",
+        "tenure_months": loan.tenure_months,
+        "interest_rate_annual": str(loan.interest_rate_annual),
+    }
+
+
+@app.get("/loans", tags=["loans"])
+def list_loans(
+    actor: Annotated[object, Depends(require_roles("ADMIN", "TELLER", "AUDITOR"))],
+    session: Annotated[Session, Depends(get_db)],
+    status_filter: Annotated[str | None, Query(alias="status")] = None,
+    limit: Annotated[int, Query(ge=1, le=100)] = 50,
+    offset: Annotated[int, Query(ge=0)] = 0,
+):
+    stmt = select(Loan, Customer).join(Customer, Loan.customer_id == Customer.id)
+    if status_filter:
+        stmt = stmt.where(Loan.status == status_filter)
+    rows = session.execute(
+        stmt.order_by(Loan.created_at.desc()).limit(limit).offset(offset)
+    ).all()
+    session.add(
+        AuditEvent(
+            actor_id=actor.id, action="loan.list", entity_type="loan", entity_id="collection"
+        )
+    )
+    session.commit()
+    return [
+        {
+            "loan_id": str(loan.id),
+            "customer_name": f"{customer.first_name} {customer.last_name}",
+            "loan_type": loan.loan_type,
+            "status": loan.status,
+            "principal": f"{loan.principal_minor / 100:.2f}",
+            "outstanding": f"{loan.outstanding_minor / 100:.2f}",
+            "emi": f"{loan.emi_minor / 100:.2f}",
+            "interest_rate_annual": str(loan.interest_rate_annual),
+            "tenure_months": loan.tenure_months,
+            "next_emi_date": str(loan.next_emi_date) if loan.next_emi_date else None,
+            "created_at": loan.created_at.isoformat(),
+        }
+        for loan, customer in rows
+    ]
+
+
+@app.get("/loans/{loan_id}", tags=["loans"])
+def get_loan(
+    loan_id: uuid.UUID,
+    actor: Annotated[object, Depends(require_roles("ADMIN", "TELLER", "AUDITOR"))],
+    session: Annotated[Session, Depends(get_db)],
+):
+    loan = session.get(Loan, loan_id)
+    if loan is None:
+        raise HTTPException(status_code=404, detail="Loan not found.")
+    customer = session.get(Customer, loan.customer_id)
+    repayments = session.scalars(
+        select(LoanRepayment).where(LoanRepayment.loan_id == loan_id)
+        .order_by(LoanRepayment.created_at.desc())
+    ).all()
+    session.add(
+        AuditEvent(
+            actor_id=actor.id, action="loan.read", entity_type="loan", entity_id=str(loan.id)
+        )
+    )
+    session.commit()
+    return {
+        "loan_id": str(loan.id),
+        "customer_name": f"{customer.first_name} {customer.last_name}" if customer else "N/A",
+        "loan_type": loan.loan_type,
+        "status": loan.status,
+        "principal": f"{loan.principal_minor / 100:.2f}",
+        "outstanding": f"{loan.outstanding_minor / 100:.2f}",
+        "emi": f"{loan.emi_minor / 100:.2f}",
+        "interest_rate_annual": str(loan.interest_rate_annual),
+        "tenure_months": loan.tenure_months,
+        "next_emi_date": str(loan.next_emi_date) if loan.next_emi_date else None,
+        "disbursed_at": loan.disbursed_at.isoformat() if loan.disbursed_at else None,
+        "memo": loan.memo,
+        "repayments": [
+            {
+                "id": str(r.id),
+                "amount": f"{r.amount_minor / 100:.2f}",
+                "principal": f"{r.principal_component_minor / 100:.2f}",
+                "interest": f"{r.interest_component_minor / 100:.2f}",
+                "date": r.created_at.isoformat(),
+            }
+            for r in repayments
+        ],
+    }
+
+
+@app.post("/loans/{loan_id}/action", tags=["loans"])
+def loan_action(
+    loan_id: uuid.UUID,
+    body: LoanActionRequest,
+    idempotency_key: Annotated[str, Header(alias="Idempotency-Key")],
+    actor: Annotated[object, Depends(require_roles("ADMIN"))],
+    session: Annotated[Session, Depends(get_db)],
+    settings: Annotated[Settings, Depends(get_settings)],
+):
+    """Approve, reject, or disburse a loan."""
+    result = _service(session, settings).action_loan(
+        actor.id, idempotency_key, loan_id, body.action, body.memo
+    )
+    session.commit()
+    return result
+
+
+@app.post("/loans/{loan_id}/repayments", tags=["loans"])
+def repay_loan(
+    loan_id: uuid.UUID,
+    body: LoanRepaymentRequest,
+    idempotency_key: Annotated[str, Header(alias="Idempotency-Key")],
+    actor: Annotated[object, Depends(require_roles("ADMIN", "TELLER"))],
+    session: Annotated[Session, Depends(get_db)],
+    settings: Annotated[Settings, Depends(get_settings)],
+):
+    """Post an EMI repayment against a loan."""
+    result = _service(session, settings).repay_loan(
+        actor.id, idempotency_key, loan_id, body.amount, body.memo
+    )
+    return _operation_response(result)
+
+
+# ─── Fixed Deposits ───────────────────────────────────────────────────────────
+
+@app.post("/fixed-deposits", status_code=201, tags=["fixed-deposits"])
+def open_fd(
+    body: FixedDepositOpenRequest,
+    idempotency_key: Annotated[str, Header(alias="Idempotency-Key")],
+    actor: Annotated[object, Depends(require_roles("ADMIN", "TELLER"))],
+    session: Annotated[Session, Depends(get_db)],
+    settings: Annotated[Settings, Depends(get_settings)],
+):
+    """Open a new Fixed Deposit."""
+    result = _service(session, settings).open_fd(
+        actor.id, idempotency_key,
+        body.account_number, body.principal_amount,
+        body.interest_rate_annual, body.tenure_days,
+    )
+    session.commit()
+    return result
+
+
+@app.get("/fixed-deposits", tags=["fixed-deposits"])
+def list_fds(
+    actor: Annotated[object, Depends(require_roles("ADMIN", "TELLER", "AUDITOR"))],
+    session: Annotated[Session, Depends(get_db)],
+    status_filter: Annotated[str | None, Query(alias="status")] = None,
+    limit: Annotated[int, Query(ge=1, le=100)] = 50,
+    offset: Annotated[int, Query(ge=0)] = 0,
+):
+    stmt = select(FixedDeposit, Customer).join(
+        Customer, FixedDeposit.customer_id == Customer.id
+    )
+    if status_filter:
+        stmt = stmt.where(FixedDeposit.status == status_filter)
+    rows = session.execute(
+        stmt.order_by(FixedDeposit.opened_at.desc()).limit(limit).offset(offset)
+    ).all()
+    session.add(
+        AuditEvent(
+            actor_id=actor.id, action="fd.list", entity_type="fixed_deposit", entity_id="collection"
+        )
+    )
+    session.commit()
+    return [
+        {
+            "fd_id": str(fd.id),
+            "customer_name": f"{customer.first_name} {customer.last_name}",
+            "status": fd.status,
+            "principal": f"{fd.principal_minor / 100:.2f}",
+            "interest_rate_annual": str(fd.interest_rate_annual),
+            "tenure_days": fd.tenure_days,
+            "maturity_date": str(fd.maturity_date),
+            "maturity_amount": f"{fd.maturity_amount_minor / 100:.2f}",
+            "opened_at": fd.opened_at.isoformat(),
+        }
+        for fd, customer in rows
+    ]
+
+
+@app.post("/fixed-deposits/{fd_id}/close", tags=["fixed-deposits"])
+def close_fd(
+    fd_id: uuid.UUID,
+    body: FixedDepositCloseRequest,
+    idempotency_key: Annotated[str, Header(alias="Idempotency-Key")],
+    actor: Annotated[object, Depends(require_roles("ADMIN"))],
+    session: Annotated[Session, Depends(get_db)],
+    settings: Annotated[Settings, Depends(get_settings)],
+):
+    """Close (mature or premature) a fixed deposit."""
+    result = _service(session, settings).close_fd(
+        actor.id, idempotency_key, fd_id, body.premature
+    )
+    session.commit()
+    return result
+
+
+# ─── Admin / Audit ────────────────────────────────────────────────────────────
+
+@app.get("/admin/reconciliation", tags=["admin"])
+def reconciliation(
+    actor: Annotated[object, Depends(require_roles("ADMIN", "AUDITOR"))],
+    session: Annotated[Session, Depends(get_db)],
+    settings: Annotated[Settings, Depends(get_settings)],
+):
+    report = _service(session, settings).reconcile_ledger()
+    session.add(
+        AuditEvent(
+            actor_id=actor.id,
+            action="ledger.reconciliation",
+            entity_type="ledger",
+            entity_id="all",
+            metadata_json={"balanced": report["balanced"], "discrepancy_count": len(report["discrepancies"])},
+        )
+    )
+    session.commit()
+    return report
+
+
+@app.get("/admin/audit-logs", tags=["admin"])
+def audit_logs(
+    actor: Annotated[object, Depends(require_roles("ADMIN", "AUDITOR"))],
+    session: Annotated[Session, Depends(get_db)],
+    limit: Annotated[int, Query(ge=1, le=100)] = 50,
+    offset: Annotated[int, Query(ge=0)] = 0,
+    action: Annotated[str | None, Query(max_length=100)] = None,
+):
+    query = (
+        select(AuditEvent, StaffUser.username, StaffUser.full_name)
+        .outerjoin(StaffUser, AuditEvent.actor_id == StaffUser.id)
+    )
+    if action and action.strip():
+        query = query.where(AuditEvent.action.ilike(f"%{action.strip()}%"))
+    query = (
+        query.order_by(AuditEvent.created_at.desc(), AuditEvent.id.desc())
+        .limit(limit)
+        .offset(offset)
+    )
+    rows = session.execute(query).all()
+    return [
+        {
+            "id": event.id,
+            "actor_username": username or "System",
+            "actor_name": full_name or "System",
+            "action": event.action,
+            "entity_type": event.entity_type,
+            "entity_id": event.entity_id,
+            "metadata": event.metadata_json,
+            "created_at": event.created_at.isoformat(),
+        }
+        for event, username, full_name in rows
+    ]
+
+
+@app.get("/admin/notifications", tags=["admin"])
+def notification_logs(
+    actor: Annotated[object, Depends(require_roles("ADMIN", "AUDITOR"))],
+    session: Annotated[Session, Depends(get_db)],
+    limit: Annotated[int, Query(ge=1, le=100)] = 50,
+    offset: Annotated[int, Query(ge=0)] = 0,
+):
+    """View the simulated SMS/email notification log."""
+    logs = session.scalars(
+        select(NotificationLog)
+        .order_by(NotificationLog.created_at.desc())
+        .limit(limit)
+        .offset(offset)
+    ).all()
+    return [
+        {
+            "id": log.id,
+            "channel": log.channel,
+            "recipient": log.recipient,
+            "subject": log.subject,
+            "body": log.body,
+            "status": log.status,
+            "created_at": log.created_at.isoformat(),
+        }
+        for log in logs
+    ]

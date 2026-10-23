@@ -88,6 +88,7 @@ button {
 button:hover:not(:disabled) { background: var(--green-dark); }
 .button-secondary { border: 1px solid #cbdad2; background: white; color: var(--green-dark); }
 .button-secondary:hover:not(:disabled) { background: var(--mint); }
+.button-link { display: inline-flex; align-items: center; text-decoration: none; }
 .button-quiet { min-height: 36px; padding: 8px 12px; border: 1px solid transparent; background: transparent; color: var(--muted); }
 .button-quiet:hover:not(:disabled) { background: var(--mint); color: var(--green-dark); border-color: #cbdad2; }
 
@@ -218,6 +219,11 @@ tbody tr:last-child td { border-bottom: 0; }
 .staff-row strong, .staff-row span { display: block; }
 .staff-row strong { font-size: .82rem; }
 .staff-row div span { margin-top: 3px; color: var(--muted); font-size: .75rem; }
+.staff-controls { display: flex; align-items: center; gap: 10px; }
+.staff-controls select { min-height: 34px; width: auto; padding: 6px 9px; }
+.inline-form { display: flex; align-items: end; gap: 12px; margin-top: 20px; }
+.inline-form label { flex: 1; }
+.inline-form button { white-space: nowrap; }
 .alert { padding: 12px 14px; border-radius: 9px; font-size: .86rem; margin-bottom: 14px; }
 .alert.error { background: #fbeceb; color: var(--red); }
 .alert.success { background: #e8f5ed; color: #206b48; }
@@ -327,6 +333,8 @@ footer { padding: 24px 2px; color: var(--muted); text-align: center; font-size: 
   .metric-grid { grid-template-columns: repeat(2, 1fr); }
   .statement-summary-bar { grid-template-columns: repeat(2, 1fr); }
   .app-shell { padding: 0 20px 28px; }
+  .staff-row { align-items: flex-start; flex-direction: column; }
+  .staff-controls { width: 100%; flex-wrap: wrap; }
 }
 @media (max-width: 600px) {
   .app-shell { padding: 0 14px 22px; }
@@ -339,6 +347,9 @@ footer { padding: 24px 2px; color: var(--muted); text-align: center; font-size: 
   .metric-card { padding: 14px; }
   .metric-card strong { font-size: 1.15rem; }
   .work-grid { grid-template-columns: 1fr; }
+  .inline-form { align-items: stretch; flex-direction: column; }
   .login-card { padding: 28px 22px; }
   .tabs { width: 100%; overflow-x: auto; }
+  .tab-btn { flex: 0 0 auto; padding: 8px 12px; }
+  .staff-controls select { flex: 1 1 100%; }
 }

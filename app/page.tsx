@@ -4,18 +4,72 @@ import { FormEvent, useCallback, useEffect, useState } from "react";
 
 type Role = "ADMIN" | "TELLER" | "AUDITOR";
 type Staff = { id: string; username: string; full_name: string; role: Role };
+type StaffMember = Staff & { active: boolean; created_at?: string };
 type Account = {
   account_number: string;
   ifsc: string;
   status: string;
   balance: string;
   customer_name: string;
+  account_type?: string;
+  kyc_status?: string;
 };
 type Branch = { ifsc: string; name: string };
 type Summary = {
   accounts: { total: number; active: number; frozen: number; closed: number };
   total_balance: string;
   transactions: number;
+  loans?: { active: number; applied: number; approved: number; outstanding: string };
+  fixed_deposits?: { active: number; total_value: string };
+};
+type Loan = {
+  loan_id: string;
+  customer_name: string;
+  loan_type: string;
+  status: string;
+  principal: string;
+  outstanding: string;
+  emi: string;
+  interest_rate_annual: string;
+  tenure_months: number;
+  next_emi_date: string | null;
+  created_at: string;
+};
+type FixedDeposit = {
+  fd_id: string;
+  customer_name: string;
+  status: string;
+  principal: string;
+  interest_rate_annual: string;
+  tenure_days: number;
+  maturity_date: string;
+  maturity_amount: string;
+  opened_at: string;
+};
+type CustomerDetails = {
+  id: string;
+  first_name: string;
+  last_name: string;
+  phone?: string;
+  email?: string | null;
+  address_line1?: string | null;
+  address_city?: string | null;
+  address_pin?: string | null;
+  kyc_status: string;
+};
+type LoanDetails = Omit<Loan, "created_at"> & {
+  disbursed_at?: string | null;
+  memo: string;
+  repayments: { id: string; amount: string; principal: string; interest: string; date: string }[];
+};
+type NotificationLog = {
+  id: number;
+  channel: string;
+  recipient: string;
+  subject: string;
+  body: string;
+  status: string;
+  created_at: string;
 };
 type Transaction = {
   transaction_id: string;
@@ -99,10 +153,40 @@ export default function Home() {
   const [selectedAccount, setSelectedAccount] = useState("");
   const [transactions, setTransactions] = useState<Transaction[]>([]);
   const [reconciliation, setReconciliation] = useState<string>("");
-  const [staffMembers, setStaffMembers] = useState<Staff[]>([]);
+  const [staffMembers, setStaffMembers] = useState<StaffMember[]>([]);
 
   // Navigation tab
-  const [activeTab, setActiveTab] = useState<"DASHBOARD" | "AUDIT" | "RECONCILIATION">("DASHBOARD");
+  const [activeTab, setActiveTab] = useState<
+    "DASHBOARD" | "LENDING" | "CUSTOMERS" | "AUDIT" | "RECONCILIATION"
+  >("DASHBOARD");
+  const [loans, setLoans] = useState<Loan[]>([]);
+  const [fixedDeposits, setFixedDeposits] = useState<FixedDeposit[]>([]);
+  const [customerDetails, setCustomerDetails] = useState<CustomerDetails | null>(null);
+  const [customerAccount, setCustomerAccount] = useState("");
+  const [kycStatus, setKycStatus] = useState("PENDING");
+  const [profilePhone, setProfilePhone] = useState("");
+  const [profileEmail, setProfileEmail] = useState("");
+  const [profileAddress, setProfileAddress] = useState("");
+  const [profileCity, setProfileCity] = useState("");
+  const [profilePin, setProfilePin] = useState("");
+  const [loanAccount, setLoanAccount] = useState("");
+  const [loanType, setLoanType] = useState("PERSONAL");
+  const [loanPrincipal, setLoanPrincipal] = useState("");
+  const [loanRate, setLoanRate] = useState("12");
+  const [loanTenure, setLoanTenure] = useState("12");
+  const [fdAccount, setFdAccount] = useState("");
+  const [fdPrincipal, setFdPrincipal] = useState("");
+  const [fdRate, setFdRate] = useState("7");
+  const [fdTenure, setFdTenure] = useState("365");
+  const [interestAccount, setInterestAccount] = useState("");
+  const [interestPeriod, setInterestPeriod] = useState(new Date().toISOString().slice(0, 7));
+  const [loanDetails, setLoanDetails] = useState<LoanDetails | null>(null);
+  const [repaymentAmount, setRepaymentAmount] = useState("");
+  const [repaymentMemo, setRepaymentMemo] = useState("");
+  const [reverseTransaction, setReverseTransaction] = useState<Transaction | null>(null);
+  const [reversalReason, setReversalReason] = useState("");
+  const [staffPasswordTarget, setStaffPasswordTarget] = useState<StaffMember | null>(null);
+  const [staffResetPassword, setStaffResetPassword] = useState("");
 
   // Cash operations state
   const [action, setAction] = useState<"DEPOSIT" | "WITHDRAWAL">("DEPOSIT");
@@ -131,6 +215,7 @@ export default function Home() {
   const [customerState, setCustomerState] = useState("");
   const [identityNumber, setIdentityNumber] = useState("");
   const [openingDeposit, setOpeningDeposit] = useState("2000.00");
+  const [accountType, setAccountType] = useState<"SAVINGS" | "CURRENT" | "SALARY">("SAVINGS");
 
   // Branch creation
   const [branchCode, setBranchCode] = useState("");
@@ -152,6 +237,8 @@ export default function Home() {
   // Audit logs state
   const [auditLogs, setAuditLogs] = useState<AuditLog[]>([]);
   const [auditSearch, setAuditSearch] = useState("");
+  const [notifications, setNotifications] = useState<NotificationLog[]>([]);
+  const [auditView, setAuditView] = useState<"AUDIT" | "NOTIFICATIONS">("AUDIT");
 
   const loadDashboard = useCallback(async () => {
     const [nextSummary, nextAccounts, nextBranches, nextStates] = await Promise.all([
@@ -167,7 +254,16 @@ export default function Home() {
   }, []);
 
   const loadStaff = useCallback(async () => {
-    setStaffMembers(await api<Staff[]>("staff?limit=100&offset=0"));
+    setStaffMembers(await api<StaffMember[]>("staff?limit=100&offset=0"));
+  }, []);
+
+  const loadProducts = useCallback(async () => {
+    const [nextLoans, nextFixedDeposits] = await Promise.all([
+      api<Loan[]>("loans?limit=50&offset=0"),
+      api<FixedDeposit[]>("fixed-deposits?limit=50&offset=0"),
+    ]);
+    setLoans(nextLoans);
+    setFixedDeposits(nextFixedDeposits);
   }, []);
 
   const loadAuditLogs = useCallback(async (actionFilter = "") => {
@@ -175,6 +271,10 @@ export default function Home() {
     if (actionFilter.trim()) params.set("action", actionFilter.trim());
     const logs = await api<AuditLog[]>(`admin/audit-logs?${params}`);
     setAuditLogs(logs);
+  }, []);
+
+  const loadNotifications = useCallback(async () => {
+    setNotifications(await api<NotificationLog[]>("admin/notifications?limit=50&offset=0"));
   }, []);
 
   useEffect(() => {
@@ -195,6 +295,7 @@ export default function Home() {
         setStaff(currentStaff);
         try {
           await loadDashboard();
+          await loadProducts();
           if (currentStaff.role === "ADMIN") await loadStaff();
           if (currentStaff.role === "ADMIN" || currentStaff.role === "AUDITOR") {
             await loadAuditLogs();
@@ -209,7 +310,7 @@ export default function Home() {
         }
         setStaff(null);
       });
-  }, [loadDashboard, loadStaff, loadAuditLogs]);
+  }, [loadDashboard, loadProducts, loadStaff, loadAuditLogs]);
 
   async function run(actionToRun: () => Promise<void>) {
     setBusy(true);
@@ -238,6 +339,7 @@ export default function Home() {
       setStaff(currentStaff);
       setPassword("");
       await loadDashboard();
+      await loadProducts();
       if (currentStaff.role === "ADMIN") await loadStaff();
       if (currentStaff.role === "ADMIN" || currentStaff.role === "AUDITOR") {
         await loadAuditLogs();
@@ -281,7 +383,7 @@ export default function Home() {
     await run(async () => {
       const params = new URLSearchParams({ limit: "500", offset: "0" });
       if (start) params.set("start_at", new Date(start).toISOString());
-      if (end) params.set("end_at", new Date(end).toISOString());
+      if (end) params.set("end_at", new Date(`${end}T23:59:59.999`).toISOString());
       if (kind) params.set("kind", kind);
 
       const data = await api<StatementData>(`accounts/${accountNumber}/statement?${params}`);
@@ -346,6 +448,15 @@ export default function Home() {
     });
   }
 
+  async function closeAccount(account: Account) {
+    if (Number(account.balance) !== 0) {
+      setError("An account can only be closed after its balance reaches ₹0.00.");
+      return;
+    }
+    if (!window.confirm(`Permanently close zero-balance account ${account.account_number}?`)) return;
+    await changeStatus(account.account_number, "CLOSED");
+  }
+
   async function createStaff(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
     await run(async () => {
@@ -384,6 +495,7 @@ export default function Home() {
           },
           opening_deposit: openingDeposit,
           branch_ifsc: branchIfsc || branches[0]?.ifsc,
+          account_type: accountType,
         }),
       });
       setCustomerFirst("");
@@ -406,6 +518,196 @@ export default function Home() {
       setBranchName("");
       setNotice("Branch saved to PostgreSQL.");
       await loadDashboard();
+    });
+  }
+
+  async function openCustomer(accountNumber: string) {
+    await run(async () => {
+      const account = await api<{
+        customer: CustomerDetails;
+      }>(`accounts/${accountNumber}`);
+      setCustomerDetails(account.customer);
+      setCustomerAccount(accountNumber);
+      setKycStatus(account.customer.kyc_status);
+      setProfilePhone(account.customer.phone ?? "");
+      setProfileEmail(account.customer.email ?? "");
+      setProfileAddress(account.customer.address_line1 ?? "");
+      setProfileCity(account.customer.address_city ?? "");
+      setProfilePin(account.customer.address_pin ?? "");
+    });
+  }
+
+  async function saveCustomerProfile(event: FormEvent<HTMLFormElement>) {
+    event.preventDefault();
+    if (!customerDetails) return;
+    await run(async () => {
+      await api(`customers/${customerDetails.id}/profile`, {
+        method: "PATCH",
+        body: JSON.stringify({
+          phone: profilePhone,
+          email: profileEmail || null,
+          address_line1: profileAddress || null,
+          address_city: profileCity || null,
+          address_pin: profilePin || null,
+        }),
+      });
+      setNotice("Customer profile updated.");
+      await openCustomer(customerAccount);
+    });
+  }
+
+  async function saveKycStatus() {
+    if (!customerDetails) return;
+    await run(async () => {
+      await api(`customers/${customerDetails.id}/kyc`, {
+        method: "PATCH",
+        body: JSON.stringify({ kyc_status: kycStatus }),
+      });
+      setCustomerDetails({ ...customerDetails, kyc_status: kycStatus });
+      setNotice(`KYC status updated to ${kycStatus}.`);
+      await loadDashboard();
+    });
+  }
+
+  async function submitLoan(event: FormEvent<HTMLFormElement>) {
+    event.preventDefault();
+    await run(async () => {
+      const result = await api<{ emi: string }>("loans", {
+        method: "POST",
+        body: JSON.stringify({
+          account_number: loanAccount,
+          loan_type: loanType,
+          principal_amount: loanPrincipal,
+          interest_rate_annual: loanRate,
+          tenure_months: Number(loanTenure),
+        }),
+      });
+      setLoanPrincipal("");
+      setNotice(`Loan application submitted. Estimated EMI: ₹${result.emi}.`);
+      await Promise.all([loadProducts(), loadDashboard()]);
+    });
+  }
+
+  async function submitFixedDeposit(event: FormEvent<HTMLFormElement>) {
+    event.preventDefault();
+    await run(async () => {
+      await api("fixed-deposits", {
+        method: "POST",
+        headers: { "Idempotency-Key": operationKey() },
+        body: JSON.stringify({
+          account_number: fdAccount,
+          principal_amount: fdPrincipal,
+          interest_rate_annual: fdRate,
+          tenure_days: Number(fdTenure),
+        }),
+      });
+      setFdPrincipal("");
+      setNotice("Fixed deposit opened and ledger updated.");
+      await Promise.all([loadProducts(), loadDashboard()]);
+    });
+  }
+
+  async function closeFixedDeposit(fd: FixedDeposit, premature: boolean) {
+    if (!window.confirm(
+      premature
+        ? `Close this FD before maturity (${fd.maturity_date})? A premature-closure adjustment may apply.`
+        : `Close this FD at maturity (${fd.maturity_date})?`,
+    )) return;
+    await run(async () => {
+      await api(`fixed-deposits/${fd.fd_id}/close`, {
+        method: "POST",
+        headers: { "Idempotency-Key": operationKey() },
+        body: JSON.stringify({ premature }),
+      });
+      setNotice(`Fixed deposit for ${fd.customer_name} closed.`);
+      await Promise.all([loadProducts(), loadDashboard()]);
+    });
+  }
+
+  async function postInterest(event: FormEvent<HTMLFormElement>) {
+    event.preventDefault();
+    await run(async () => {
+      await api(`accounts/${interestAccount}/interest?period_month=${encodeURIComponent(interestPeriod)}`, {
+        method: "POST",
+        headers: { "Idempotency-Key": operationKey() },
+      });
+      setNotice(`Interest for ${interestPeriod} posted to ${interestAccount}.`);
+      await Promise.all([loadDashboard(), selectAccount(interestAccount)]);
+    });
+  }
+
+  async function openLoan(loanId: string) {
+    await run(async () => {
+      setLoanDetails(await api<LoanDetails>(`loans/${loanId}`));
+      setRepaymentAmount("");
+      setRepaymentMemo("");
+    });
+  }
+
+  async function runLoanAction(loan: Loan, action: "APPROVE" | "REJECT" | "DISBURSE") {
+    await run(async () => {
+      await api(`loans/${loan.loan_id}/action`, {
+        method: "POST",
+        headers: { "Idempotency-Key": operationKey() },
+        body: JSON.stringify({ action }),
+      });
+      setNotice(`Loan ${action.toLowerCase()} action completed.`);
+      await Promise.all([loadProducts(), loadDashboard()]);
+    });
+  }
+
+  async function submitRepayment(event: FormEvent<HTMLFormElement>) {
+    event.preventDefault();
+    if (!loanDetails) return;
+    await run(async () => {
+      await api(`loans/${loanDetails.loan_id}/repayments`, {
+        method: "POST",
+        headers: { "Idempotency-Key": operationKey() },
+        body: JSON.stringify({ amount: repaymentAmount, memo: repaymentMemo }),
+      });
+      setNotice("Loan repayment posted.");
+      await Promise.all([loadProducts(), loadDashboard(), openLoan(loanDetails.loan_id)]);
+    });
+  }
+
+  async function submitReversal(event: FormEvent<HTMLFormElement>) {
+    event.preventDefault();
+    if (!reverseTransaction) return;
+    await run(async () => {
+      await api(`transactions/${reverseTransaction.transaction_id}/reversals`, {
+        method: "POST",
+        headers: { "Idempotency-Key": operationKey() },
+        body: JSON.stringify({ reason: reversalReason }),
+      });
+      setNotice("Transaction reversal posted as a new ledger transaction.");
+      setReverseTransaction(null);
+      setReversalReason("");
+      await Promise.all([loadDashboard(), selectAccount(selectedAccount)]);
+    });
+  }
+
+  async function updateStaffMember(member: StaffMember, change: { active?: boolean; role?: Role }) {
+    await run(async () => {
+      await api(`staff/${member.id}`, {
+        method: "PATCH",
+        body: JSON.stringify(change),
+      });
+      setNotice(`Staff account @${member.username} updated.`);
+      await loadStaff();
+    });
+  }
+
+  async function resetStaffPassword(event: FormEvent<HTMLFormElement>) {
+    event.preventDefault();
+    if (!staffPasswordTarget) return;
+    await run(async () => {
+      await api(`staff/${staffPasswordTarget.id}/password-reset`, {
+        method: "POST",
+        body: JSON.stringify({ password: staffResetPassword }),
+      });
+      setNotice(`Password reset for @${staffPasswordTarget.username}.`);
+      setStaffPasswordTarget(null);
+      setStaffResetPassword("");
     });
   }
 
@@ -547,15 +849,33 @@ export default function Home() {
         >
           Banking Operations
         </button>
+        <button
+          className={`tab-btn ${activeTab === "LENDING" ? "active" : ""}`}
+          onClick={() => {
+            setActiveTab("LENDING");
+            run(loadProducts);
+          }}
+        >
+          Loans & Deposits
+        </button>
+        {staff.role !== "AUDITOR" && (
+          <button
+            className={`tab-btn ${activeTab === "CUSTOMERS" ? "active" : ""}`}
+            onClick={() => setActiveTab("CUSTOMERS")}
+          >
+            Customer Services
+          </button>
+        )}
         {(staff.role === "ADMIN" || staff.role === "AUDITOR") && (
           <button
             className={`tab-btn ${activeTab === "AUDIT" ? "active" : ""}`}
             onClick={() => {
               setActiveTab("AUDIT");
-              loadAuditLogs();
+              setAuditView("AUDIT");
+              run(loadAuditLogs);
             }}
           >
-            Audit Trail
+            Audit & Notifications
           </button>
         )}
         {(staff.role === "ADMIN" || staff.role === "AUDITOR") && (
@@ -590,6 +910,16 @@ export default function Home() {
               <span>Account health</span>
               <strong>{summary?.accounts.frozen ?? 0} frozen</strong>
               <small>{summary?.accounts.closed ?? 0} closed</small>
+            </article>
+            <article className="metric-card">
+              <span>Loans outstanding</span>
+              <strong>₹{summary?.loans?.outstanding ?? "0.00"}</strong>
+              <small>{summary?.loans?.active ?? 0} active · {summary?.loans?.applied ?? 0} awaiting review</small>
+            </article>
+            <article className="metric-card">
+              <span>Active fixed deposits</span>
+              <strong>{summary?.fixed_deposits?.active ?? 0}</strong>
+              <small>₹{summary?.fixed_deposits?.total_value ?? "0.00"} principal</small>
             </article>
           </section>
 
@@ -627,6 +957,7 @@ export default function Home() {
                     <th>Customer</th>
                     <th>IFSC</th>
                     <th>Status</th>
+                    <th>KYC</th>
                     <th>Balance</th>
                     <th>Actions</th>
                   </tr>
@@ -642,6 +973,7 @@ export default function Home() {
                           {account.status}
                         </span>
                       </td>
+                      <td><span className="status">{account.kyc_status ?? "PENDING"}</span></td>
                       <td><strong>₹{account.balance}</strong></td>
                       <td className="row-actions">
                         <button
@@ -656,25 +988,41 @@ export default function Home() {
                         >
                           Statement
                         </button>
-                        {staff.role === "ADMIN" && account.status !== "CLOSED" && (
+                        {staff.role !== "AUDITOR" && (
                           <button
                             className="text-button"
-                            onClick={() =>
-                              changeStatus(
-                                account.account_number,
-                                account.status === "FROZEN" ? "ACTIVE" : "FROZEN"
-                              )
-                            }
+                            onClick={() => {
+                              setActiveTab("CUSTOMERS");
+                              openCustomer(account.account_number);
+                            }}
                           >
-                            {account.status === "FROZEN" ? "Unfreeze" : "Freeze"}
+                            Customer
                           </button>
+                        )}
+                        {staff.role === "ADMIN" && account.status !== "CLOSED" && (
+                          <>
+                            <button
+                              className="text-button"
+                              onClick={() =>
+                                changeStatus(
+                                  account.account_number,
+                                  account.status === "FROZEN" ? "ACTIVE" : "FROZEN"
+                                )
+                              }
+                            >
+                              {account.status === "FROZEN" ? "Unfreeze" : "Freeze"}
+                            </button>
+                            <button className="text-button" onClick={() => closeAccount(account)}>
+                              Close
+                            </button>
+                          </>
                         )}
                       </td>
                     </tr>
                   ))}
                   {filteredAccounts.length === 0 && (
                     <tr>
-                      <td colSpan={6} className="empty">No accounts match the current filter.</td>
+                      <td colSpan={7} className="empty">No accounts match the current filter.</td>
                     </tr>
                   )}
                 </tbody>
@@ -720,7 +1068,19 @@ export default function Home() {
                           {transaction.debit ? `-₹${transaction.debit}` : "—"}
                         </td>
                         <td>{transaction.memo || "—"}</td>
-                        <td><span className="status">{transaction.status}</span></td>
+                        <td className="row-actions">
+                          <span className="status">{transaction.status}</span>
+                          {staff.role === "ADMIN" &&
+                            transaction.status === "POSTED" &&
+                            transaction.type !== "REVERSAL" && (
+                              <button
+                                className="text-button"
+                                onClick={() => setReverseTransaction(transaction)}
+                              >
+                                Reverse
+                              </button>
+                            )}
+                        </td>
                       </tr>
                     ))}
                     {transactions.length === 0 && (
@@ -747,6 +1107,7 @@ export default function Home() {
                   <label>State / union territory<select value={customerState} onChange={(event) => setCustomerState(event.target.value)} required><option value="">Select a state</option>{states.map((state) => <option key={state} value={state}>{state}</option>)}</select></label>
                   <label>Identity number (Aadhaar 12-digit)<input inputMode="numeric" pattern="[0-9]{12}" value={identityNumber} onChange={(event) => setIdentityNumber(event.target.value)} required /></label>
                   <label>Branch<select value={branchIfsc} onChange={(event) => setBranchIfsc(event.target.value)} required>{branches.map((branch) => <option key={branch.ifsc} value={branch.ifsc}>{branch.name} · {branch.ifsc}</option>)}</select></label>
+                  <label>Account type<select value={accountType} onChange={(event) => setAccountType(event.target.value as "SAVINGS" | "CURRENT" | "SALARY")}><option value="SAVINGS">Savings</option><option value="CURRENT">Current</option><option value="SALARY">Salary</option></select></label>
                   <label>Opening deposit (₹, min 2000)<input inputMode="decimal" value={openingDeposit} onChange={(event) => setOpeningDeposit(event.target.value)} required /></label>
                   <button disabled={busy}>Open account in PostgreSQL</button>
                 </form>
@@ -824,12 +1185,182 @@ export default function Home() {
                     <div className="staff-row" key={member.id}>
                       <div>
                         <strong>{member.full_name}</strong>
-                        <span>@{member.username}</span>
+                        <span>@{member.username} · {member.active ? "Active" : "Inactive"}</span>
                       </div>
-                      <span className="status">{member.role}</span>
+                      <div className="staff-controls">
+                        <select
+                          aria-label={`Role for ${member.username}`}
+                          value={member.role}
+                          disabled={busy || member.id === staff.id}
+                          onChange={(event) => updateStaffMember(member, { role: event.target.value as Role })}
+                        >
+                          <option value="ADMIN">Admin</option><option value="TELLER">Teller</option><option value="AUDITOR">Auditor</option>
+                        </select>
+                        <button className="text-button" disabled={busy || member.id === staff.id} onClick={() => updateStaffMember(member, { active: !member.active })}>
+                          {member.active ? "Deactivate" : "Activate"}
+                        </button>
+                        <button className="text-button" disabled={busy} onClick={() => setStaffPasswordTarget(member)}>Reset password</button>
+                      </div>
                     </div>
                   ))}
+                  {staffMembers.length === 0 && <p className="empty">No staff accounts found.</p>}
                 </div>
+              </article>
+            </section>
+          )}
+        </>
+      )}
+
+      {activeTab === "LENDING" && (
+        <>
+          {staff.role !== "AUDITOR" && (
+            <section className="work-grid">
+              <article className="panel">
+                <h2>New loan application</h2>
+                <p className="muted">Link an account, enter terms, then an admin can approve or reject the application.</p>
+                <form className="stack" onSubmit={submitLoan}>
+                  <label>Customer account number<input inputMode="numeric" pattern="[0-9]{10}" value={loanAccount} onChange={(event) => setLoanAccount(event.target.value)} required /></label>
+                  <label>Loan product<select value={loanType} onChange={(event) => setLoanType(event.target.value)}><option value="PERSONAL">Personal</option><option value="HOME">Home</option><option value="VEHICLE">Vehicle</option><option value="EDUCATION">Education</option><option value="GOLD">Gold</option></select></label>
+                  <label>Principal (₹)<input inputMode="decimal" value={loanPrincipal} onChange={(event) => setLoanPrincipal(event.target.value)} required /></label>
+                  <label>Annual interest rate (%)<input type="number" min="0.01" max="36" step="0.01" value={loanRate} onChange={(event) => setLoanRate(event.target.value)} required /></label>
+                  <label>Tenure (months)<input type="number" min="1" max="360" value={loanTenure} onChange={(event) => setLoanTenure(event.target.value)} required /></label>
+                  <button disabled={busy}>Submit loan application</button>
+                </form>
+              </article>
+              <article className="panel">
+                <h2>Open fixed deposit</h2>
+                <p className="muted">FD principal is transferred from the selected active account into the deposit ledger.</p>
+                <form className="stack" onSubmit={submitFixedDeposit}>
+                  <label>Funding account number<input inputMode="numeric" pattern="[0-9]{10}" value={fdAccount} onChange={(event) => setFdAccount(event.target.value)} required /></label>
+                  <label>Principal (₹)<input inputMode="decimal" value={fdPrincipal} onChange={(event) => setFdPrincipal(event.target.value)} required /></label>
+                  <label>Annual interest rate (%)<input type="number" min="0.01" max="15" step="0.01" value={fdRate} onChange={(event) => setFdRate(event.target.value)} required /></label>
+                  <label>Tenure (days)<input type="number" min="7" max="3650" value={fdTenure} onChange={(event) => setFdTenure(event.target.value)} required /></label>
+                  <button disabled={busy}>Open fixed deposit</button>
+                </form>
+              </article>
+              {staff.role === "ADMIN" && (
+                <article className="panel">
+                  <h2>Post monthly savings interest</h2>
+                  <p className="muted">Posts interest once per account and month. Duplicate periods are rejected by the ledger.</p>
+                  <form className="stack" onSubmit={postInterest}>
+                    <label>Savings / salary account<input inputMode="numeric" pattern="[0-9]{10}" value={interestAccount} onChange={(event) => setInterestAccount(event.target.value)} required /></label>
+                    <label>Interest month<input type="month" value={interestPeriod} onChange={(event) => setInterestPeriod(event.target.value)} required /></label>
+                    <button disabled={busy}>Post interest</button>
+                  </form>
+                </article>
+              )}
+            </section>
+          )}
+
+          <section className="panel">
+            <div className="panel-heading">
+              <div><h2>Loan portfolio</h2><p className="muted">Applications, approvals, disbursements and repayments.</p></div>
+              <button className="button-secondary" disabled={busy} onClick={() => run(loadProducts)}>Refresh products</button>
+            </div>
+            <div className="table-wrap">
+              <table>
+                <thead><tr><th>Customer</th><th>Type</th><th>Status</th><th>Principal</th><th>Outstanding</th><th>EMI</th><th>Rate / Tenure</th><th>Actions</th></tr></thead>
+                <tbody>
+                  {loans.map((loan) => (
+                    <tr key={loan.loan_id}>
+                      <td>{loan.customer_name}</td><td>{loan.loan_type}</td><td><span className="status">{loan.status}</span></td>
+                      <td>₹{loan.principal}</td><td>₹{loan.outstanding}</td><td>₹{loan.emi}</td>
+                      <td>{loan.interest_rate_annual}% · {loan.tenure_months} mo</td>
+                      <td className="row-actions">
+                        <button className="text-button" onClick={() => openLoan(loan.loan_id)}>Details / repay</button>
+                        {staff.role === "ADMIN" && loan.status === "APPLIED" && (
+                          <>
+                            <button className="text-button" disabled={busy} onClick={() => runLoanAction(loan, "APPROVE")}>Approve</button>
+                            <button className="text-button" disabled={busy} onClick={() => runLoanAction(loan, "REJECT")}>Reject</button>
+                          </>
+                        )}
+                        {staff.role === "ADMIN" && loan.status === "APPROVED" && (
+                          <button className="text-button" disabled={busy} onClick={() => runLoanAction(loan, "DISBURSE")}>Disburse</button>
+                        )}
+                      </td>
+                    </tr>
+                  ))}
+                  {loans.length === 0 && <tr><td colSpan={8} className="empty">No loan applications found.</td></tr>}
+                </tbody>
+              </table>
+            </div>
+          </section>
+
+          <section className="panel">
+            <div className="panel-heading"><div><h2>Fixed deposit portfolio</h2><p className="muted">Maturity projections use simple interest as configured by the banking service.</p></div></div>
+            <div className="table-wrap">
+              <table>
+                <thead><tr><th>Customer</th><th>Status</th><th>Principal</th><th>Rate</th><th>Tenure</th><th>Maturity date</th><th>Projected maturity</th><th>Actions</th></tr></thead>
+                <tbody>
+                  {fixedDeposits.map((fd) => (
+                    <tr key={fd.fd_id}>
+                      <td>{fd.customer_name}</td><td><span className="status">{fd.status}</span></td>
+                      <td>₹{fd.principal}</td><td>{fd.interest_rate_annual}%</td><td>{fd.tenure_days} days</td>
+                      <td>{fd.maturity_date}</td><td>₹{fd.maturity_amount}</td>
+                      <td className="row-actions">
+                        {staff.role === "ADMIN" && fd.status === "ACTIVE" && (
+                          <>
+                            <button className="text-button" disabled={busy || fd.maturity_date > new Date().toISOString().slice(0, 10)} onClick={() => closeFixedDeposit(fd, false)}>Close at maturity</button>
+                            <button className="text-button" disabled={busy} onClick={() => closeFixedDeposit(fd, true)}>Premature close</button>
+                          </>
+                        )}
+                        {fd.status !== "ACTIVE" && "—"}
+                      </td>
+                    </tr>
+                  ))}
+                  {fixedDeposits.length === 0 && <tr><td colSpan={8} className="empty">No fixed deposits found.</td></tr>}
+                </tbody>
+              </table>
+            </div>
+          </section>
+        </>
+      )}
+
+      {activeTab === "CUSTOMERS" && staff.role !== "AUDITOR" && (
+        <>
+          <section className="panel">
+            <div className="panel-heading">
+              <div><h2>Customer records & KYC</h2><p className="muted">Select an account to view or update the associated customer record.</p></div>
+              <form className="search-form" onSubmit={searchAccounts}>
+                <input aria-label="Search customers" placeholder="Search name or account number" value={query} onChange={(event) => setQuery(event.target.value)} />
+                <button className="button-secondary" disabled={busy}>Search</button>
+              </form>
+            </div>
+            <div className="table-wrap">
+              <table>
+                <thead><tr><th>Account</th><th>Customer</th><th>Account type</th><th>KYC status</th><th>Action</th></tr></thead>
+                <tbody>
+                  {accounts.map((account) => (
+                    <tr key={account.account_number}>
+                      <td className="mono">{account.account_number}</td><td>{account.customer_name}</td><td>{account.account_type ?? "SAVINGS"}</td>
+                      <td><span className="status">{account.kyc_status ?? "PENDING"}</span></td>
+                      <td><button className="text-button" onClick={() => openCustomer(account.account_number)}>Manage customer</button></td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+          </section>
+          {customerDetails && (
+            <section className="work-grid">
+              <article className="panel">
+                <h2>{customerDetails.first_name} {customerDetails.last_name}</h2>
+                <p className="muted">Customer ID: <span className="mono">{customerDetails.id}</span> · Account {customerAccount}</p>
+                <div className="inline-form">
+                  <label>KYC status<select value={kycStatus} onChange={(event) => setKycStatus(event.target.value)} disabled={staff.role !== "ADMIN"}><option value="PENDING">Pending</option><option value="VERIFIED">Verified</option><option value="REJECTED">Rejected</option></select></label>
+                  {staff.role === "ADMIN" && <button disabled={busy} onClick={saveKycStatus}>Save KYC status</button>}
+                </div>
+              </article>
+              <article className="panel">
+                <h2>Update customer profile</h2>
+                <form className="stack" onSubmit={saveCustomerProfile}>
+                  <label>Phone<input inputMode="tel" value={profilePhone} onChange={(event) => setProfilePhone(event.target.value)} required /></label>
+                  <label>Email<input type="email" value={profileEmail} onChange={(event) => setProfileEmail(event.target.value)} /></label>
+                  <label>Address<input value={profileAddress} onChange={(event) => setProfileAddress(event.target.value)} /></label>
+                  <label>City<input value={profileCity} onChange={(event) => setProfileCity(event.target.value)} /></label>
+                  <label>PIN code<input value={profilePin} onChange={(event) => setProfilePin(event.target.value)} /></label>
+                  <button disabled={busy}>Save customer profile</button>
+                </form>
               </article>
             </section>
           )}
@@ -840,9 +1371,14 @@ export default function Home() {
         <section className="panel">
           <div className="panel-heading">
             <div>
-              <h2>PostgreSQL Security Audit Trail</h2>
-              <p className="muted">Every staff login, money transfer, and account modification is recorded here.</p>
+              <h2>{auditView === "AUDIT" ? "PostgreSQL Security Audit Trail" : "Notification delivery log"}</h2>
+              <p className="muted">{auditView === "AUDIT" ? "Every staff login, money transfer, and account modification is recorded here." : "Simulated SMS/email notices recorded by the banking service."}</p>
             </div>
+            <div className="row-actions">
+              <button className={`pill-btn ${auditView === "AUDIT" ? "active" : ""}`} onClick={() => { setAuditView("AUDIT"); run(loadAuditLogs); }}>Audit trail</button>
+              <button className={`pill-btn ${auditView === "NOTIFICATIONS" ? "active" : ""}`} onClick={() => { setAuditView("NOTIFICATIONS"); run(loadNotifications); }}>Notifications</button>
+            </div>
+            {auditView === "AUDIT" && (
             <form className="search-form" onSubmit={handleAuditFilter}>
               <input
                 placeholder="Filter action (e.g. login, transfer, open)…"
@@ -851,8 +1387,10 @@ export default function Home() {
               />
               <button className="button-secondary" disabled={busy}>Filter</button>
             </form>
+            )}
           </div>
           <div className="table-wrap">
+            {auditView === "AUDIT" ? (
             <table>
               <thead>
                 <tr>
@@ -880,6 +1418,15 @@ export default function Home() {
                 )}
               </tbody>
             </table>
+            ) : (
+              <table>
+                <thead><tr><th>Timestamp</th><th>Channel</th><th>Recipient</th><th>Subject</th><th>Message</th><th>Status</th></tr></thead>
+                <tbody>
+                  {notifications.map((item) => <tr key={item.id}><td>{new Date(item.created_at).toLocaleString()}</td><td>{item.channel}</td><td>{item.recipient}</td><td>{item.subject || "—"}</td><td>{item.body}</td><td><span className="status">{item.status}</span></td></tr>)}
+                  {notifications.length === 0 && <tr><td colSpan={6} className="empty">No notifications recorded yet.</td></tr>}
+                </tbody>
+              </table>
+            )}
           </div>
         </section>
       )}
@@ -931,6 +1478,9 @@ export default function Home() {
                 >
                   Print / Save PDF
                 </button>
+                <a className="button-secondary button-link" href={`/api/banking/accounts/${statementAccount}/statement.csv`}>
+                  Download CSV
+                </a>
                 <button
                   className="modal-close"
                   onClick={() => setStatementAccount(null)}
@@ -990,6 +1540,13 @@ export default function Home() {
                   <option value="DEPOSIT">Deposit</option>
                   <option value="WITHDRAWAL">Withdrawal</option>
                   <option value="TRANSFER">Transfer</option>
+                  <option value="REVERSAL">Reversal</option>
+                  <option value="INTEREST">Interest</option>
+                  <option value="LOAN_DISBURSEMENT">Loan Disbursement</option>
+                  <option value="LOAN_REPAYMENT">Loan Repayment</option>
+                  <option value="FD_OPEN">Fixed Deposit Open</option>
+                  <option value="FD_MATURITY">FD Maturity</option>
+                  <option value="FD_PREMATURE_CLOSURE">FD Premature Closure</option>
                 </select>
               </label>
               <button className="button-secondary" disabled={busy}>Filter statement</button>
@@ -1078,6 +1635,58 @@ export default function Home() {
                 />
               </label>
               <button disabled={busy}>Update Password</button>
+            </form>
+          </div>
+        </div>
+      )}
+
+      {loanDetails && (
+        <div className="modal-overlay" onClick={() => setLoanDetails(null)}>
+          <div className="modal-box wide" onClick={(event) => event.stopPropagation()}>
+            <div className="modal-head">
+              <div><h2>{loanDetails.loan_type} loan · {loanDetails.customer_name}</h2><p className="muted">Status: {loanDetails.status} · Outstanding ₹{loanDetails.outstanding} · EMI ₹{loanDetails.emi}</p></div>
+              <button className="modal-close" onClick={() => setLoanDetails(null)}>✕</button>
+            </div>
+            {staff.role !== "AUDITOR" && loanDetails.status === "ACTIVE" && (
+              <form className="statement-filter-form" onSubmit={submitRepayment}>
+                <label>Repayment amount (₹)<input inputMode="decimal" value={repaymentAmount} onChange={(event) => setRepaymentAmount(event.target.value)} required /></label>
+                <label>Remark<input value={repaymentMemo} onChange={(event) => setRepaymentMemo(event.target.value)} /></label>
+                <button disabled={busy}>Post repayment</button>
+              </form>
+            )}
+            <h3>Repayment history</h3>
+            <div className="table-wrap">
+              <table><thead><tr><th>Date</th><th>Amount</th><th>Principal</th><th>Interest</th></tr></thead>
+                <tbody>
+                  {loanDetails.repayments.map((repayment) => <tr key={repayment.id}><td>{new Date(repayment.date).toLocaleString()}</td><td>₹{repayment.amount}</td><td>₹{repayment.principal}</td><td>₹{repayment.interest}</td></tr>)}
+                  {loanDetails.repayments.length === 0 && <tr><td colSpan={4} className="empty">No repayments posted.</td></tr>}
+                </tbody>
+              </table>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {reverseTransaction && (
+        <div className="modal-overlay" onClick={() => setReverseTransaction(null)}>
+          <div className="modal-box" onClick={(event) => event.stopPropagation()}>
+            <div className="modal-head"><div><h2>Reverse transaction</h2><p className="muted">This creates a balancing ledger entry and does not delete the original transaction.</p></div><button className="modal-close" onClick={() => setReverseTransaction(null)}>✕</button></div>
+            <p className="mono">{reverseTransaction.transaction_id} · {reverseTransaction.type}</p>
+            <form className="stack" onSubmit={submitReversal}>
+              <label>Reason (at least 5 characters)<input minLength={5} maxLength={250} value={reversalReason} onChange={(event) => setReversalReason(event.target.value)} required /></label>
+              <button disabled={busy}>Post reversal</button>
+            </form>
+          </div>
+        </div>
+      )}
+
+      {staffPasswordTarget && (
+        <div className="modal-overlay" onClick={() => setStaffPasswordTarget(null)}>
+          <div className="modal-box" onClick={(event) => event.stopPropagation()}>
+            <div className="modal-head"><div><h2>Reset staff password</h2><p className="muted">@{staffPasswordTarget.username} · minimum 12 characters</p></div><button className="modal-close" onClick={() => setStaffPasswordTarget(null)}>✕</button></div>
+            <form className="stack" onSubmit={resetStaffPassword}>
+              <label>Temporary password<input type="password" minLength={12} maxLength={256} value={staffResetPassword} onChange={(event) => setStaffResetPassword(event.target.value)} required /></label>
+              <button disabled={busy}>Reset password and revoke sessions</button>
             </form>
           </div>
         </div>
