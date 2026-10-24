@@ -1,9 +1,11 @@
 "use client";
 
-import { FormEvent, useCallback, useEffect, useState } from "react";
+import { Fragment, FormEvent, useCallback, useEffect, useState } from "react";
+import { ChartNoAxesColumn, LayoutDashboard, Landmark, Scale, ShieldCheck, UserRoundPlus, UsersRound } from "lucide-react";
 
 type Role = "ADMIN" | "TELLER" | "AUDITOR";
 type Staff = { id: string; username: string; full_name: string; role: Role };
+type StaffSession = { id: string; staff: Staff };
 type StaffMember = Staff & { active: boolean; created_at?: string };
 type Account = {
   account_number: string;
@@ -13,6 +15,25 @@ type Account = {
   customer_name: string;
   account_type?: string;
   kyc_status?: string;
+};
+type AccountAllowance = {
+  daily_withdrawal_limit: string;
+  daily_withdrawn_today: string;
+  daily_withdrawal_remaining: string;
+};
+type OperationResult = {
+  transaction_id: string;
+  account_numbers: string[];
+  balances: string[];
+};
+type TransactionReceipt = {
+  transaction_id: string;
+  type: string;
+  amount: string;
+  accounts: string[];
+  balances: string[];
+  memo: string;
+  created_at: string;
 };
 type Branch = { ifsc: string; name: string };
 type Summary = {
@@ -112,12 +133,38 @@ type AuditLog = {
   created_at: string;
 };
 
+const STAFF_SESSIONS_KEY = "shiva_staff_sessions";
+const ACTIVE_STAFF_SESSION_KEY = "shiva_active_staff_session";
+
+function storedStaffSessions(): StaffSession[] {
+  if (typeof window === "undefined") return [];
+  try {
+    const parsed = JSON.parse(window.localStorage.getItem(STAFF_SESSIONS_KEY) ?? "[]");
+    return Array.isArray(parsed) ? parsed as StaffSession[] : [];
+  } catch {
+    return [];
+  }
+}
+
+function setStoredStaffSessions(sessions: StaffSession[]) {
+  window.localStorage.setItem(STAFF_SESSIONS_KEY, JSON.stringify(sessions));
+}
+
+function activeStaffSessionId() {
+  if (typeof window === "undefined") return null;
+  return window.sessionStorage.getItem(ACTIVE_STAFF_SESSION_KEY)
+    ?? window.localStorage.getItem(ACTIVE_STAFF_SESSION_KEY);
+}
+
 async function api<T>(path: string, options: RequestInit = {}): Promise<T> {
   const response = await fetch(`/api/banking/${path}`, {
     ...options,
     cache: "no-store",
     headers: {
       ...(options.headers as Record<string, string> | undefined),
+      ...(activeStaffSessionId() && activeStaffSessionId() !== "legacy"
+        ? { "X-Banking-Session": activeStaffSessionId() as string }
+        : {}),
       ...(options.body ? { "Content-Type": "application/json" } : {}),
     },
   });
@@ -139,6 +186,11 @@ function operationKey() {
 
 export default function Home() {
   const [staff, setStaff] = useState<Staff | null>(null);
+  const [staffSessions, setStaffSessions] = useState<StaffSession[]>([]);
+  const [activeSessionId, setActiveSessionId] = useState<string | null>(null);
+  const [sessionLoginOpen, setSessionLoginOpen] = useState(false);
+  const [sessionUsername, setSessionUsername] = useState("");
+  const [sessionPassword, setSessionPassword] = useState("");
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState("");
   const [notice, setNotice] = useState("");
@@ -193,6 +245,8 @@ export default function Home() {
   const [amount, setAmount] = useState("");
   const [moneyAccount, setMoneyAccount] = useState("");
   const [moneyMemo, setMoneyMemo] = useState("");
+  const [accountAllowance, setAccountAllowance] = useState<AccountAllowance | null>(null);
+  const [receipt, setReceipt] = useState<TransactionReceipt | null>(null);
 
   // Transfer state
   const [sender, setSender] = useState("");
@@ -277,7 +331,23 @@ export default function Home() {
     setNotifications(await api<NotificationLog[]>("admin/notifications?limit=50&offset=0"));
   }, []);
 
+  async function loadStaffWorkspace(currentStaff: Staff) {
+    await Promise.all([loadDashboard(), loadProducts()]);
+    if (currentStaff.role === "ADMIN") await loadStaff();
+    else setStaffMembers([]);
+    if (currentStaff.role === "ADMIN" || currentStaff.role === "AUDITOR") {
+      await loadAuditLogs();
+    } else {
+      setAuditLogs([]);
+      setNotifications([]);
+    }
+  }
+
   useEffect(() => {
+    const savedSessions = storedStaffSessions();
+    const selectedSession = activeStaffSessionId();
+    setStaffSessions(savedSessions);
+    if (selectedSession) setActiveSessionId(selectedSession);
     const expireSession = () => {
       setStaff(null);
       setSummary(null);
@@ -292,14 +362,20 @@ export default function Home() {
   useEffect(() => {
     api<Staff>("auth/me")
       .then(async (currentStaff) => {
+        let selectedSession = activeStaffSessionId();
+        if (!selectedSession) {
+          selectedSession = "legacy";
+          window.sessionStorage.setItem(ACTIVE_STAFF_SESSION_KEY, selectedSession);
+          window.localStorage.setItem(ACTIVE_STAFF_SESSION_KEY, selectedSession);
+        }
+        const sessions = storedStaffSessions().filter((session) => session.id !== selectedSession);
+        sessions.unshift({ id: selectedSession, staff: currentStaff });
+        setStoredStaffSessions(sessions);
+        setStaffSessions(sessions);
+        setActiveSessionId(selectedSession);
         setStaff(currentStaff);
         try {
-          await loadDashboard();
-          await loadProducts();
-          if (currentStaff.role === "ADMIN") await loadStaff();
-          if (currentStaff.role === "ADMIN" || currentStaff.role === "AUDITOR") {
-            await loadAuditLogs();
-          }
+          await loadStaffWorkspace(currentStaff);
         } catch (cause) {
           setError(cause instanceof Error ? cause.message : "Could not load dashboard.");
         }
@@ -325,26 +401,64 @@ export default function Home() {
     }
   }
 
+  async function authenticateStaff(loginUsername: string, loginPassword: string) {
+    const sessionId = crypto.randomUUID();
+    const response = await fetch("/api/auth/login", {
+        method: "POST",
+        headers: { "Content-Type": "application/json", "X-Banking-Session": sessionId },
+        body: JSON.stringify({ username: loginUsername, password: loginPassword }),
+      });
+    const body = (await response.json()) as { detail?: string };
+    if (!response.ok) throw new Error(body.detail ?? "Sign in failed.");
+    window.sessionStorage.setItem(ACTIVE_STAFF_SESSION_KEY, sessionId);
+    window.localStorage.setItem(ACTIVE_STAFF_SESSION_KEY, sessionId);
+    const currentStaff = await api<Staff>("auth/me");
+    const sessions = storedStaffSessions().filter((session) => session.id !== sessionId);
+    sessions.unshift({ id: sessionId, staff: currentStaff });
+    setStoredStaffSessions(sessions);
+    setStaffSessions(sessions);
+    setActiveSessionId(sessionId);
+    setStaff(currentStaff);
+    await loadStaffWorkspace(currentStaff);
+    setNotice(`Signed in as ${currentStaff.full_name}.`);
+  }
+
   async function login(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
     await run(async () => {
-      const response = await fetch("/api/auth/login", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ username, password }),
-      });
-      const body = (await response.json()) as { detail?: string };
-      if (!response.ok) throw new Error(body.detail ?? "Sign in failed.");
-      const currentStaff = await api<Staff>("auth/me");
-      setStaff(currentStaff);
+      await authenticateStaff(username, password);
       setPassword("");
-      await loadDashboard();
-      await loadProducts();
-      if (currentStaff.role === "ADMIN") await loadStaff();
-      if (currentStaff.role === "ADMIN" || currentStaff.role === "AUDITOR") {
-        await loadAuditLogs();
+    });
+  }
+
+  async function addStaffSession(event: FormEvent<HTMLFormElement>) {
+    event.preventDefault();
+    await run(async () => {
+      await authenticateStaff(sessionUsername, sessionPassword);
+      setSessionUsername("");
+      setSessionPassword("");
+      setSessionLoginOpen(false);
+    });
+  }
+
+  async function switchStaffSession(sessionId: string) {
+    if (sessionId === activeSessionId) return;
+    const previousSession = activeSessionId;
+    await run(async () => {
+      window.sessionStorage.setItem(ACTIVE_STAFF_SESSION_KEY, sessionId);
+      try {
+        const currentStaff = await api<Staff>("auth/me");
+        setActiveSessionId(sessionId);
+        setStaff(currentStaff);
+        setActiveTab("DASHBOARD");
+        setSelectedAccount("");
+        await loadStaffWorkspace(currentStaff);
+        setNotice(`Switched to ${currentStaff.full_name}.`);
+      } catch (cause) {
+        if (previousSession) window.sessionStorage.setItem(ACTIVE_STAFF_SESSION_KEY, previousSession);
+        else window.sessionStorage.removeItem(ACTIVE_STAFF_SESSION_KEY);
+        throw cause;
       }
-      setNotice(`Welcome, ${currentStaff.full_name}. Data is persisted in PostgreSQL.`);
     });
   }
 
@@ -362,11 +476,21 @@ export default function Home() {
     setSelectedAccount(accountNumber);
     setMoneyAccount(accountNumber);
     await run(async () => {
-      const rows = await api<Transaction[]>(
-        `accounts/${accountNumber}/transactions?limit=25&offset=0`,
-      );
+      const [rows, account] = await Promise.all([
+        api<Transaction[]>(`accounts/${accountNumber}/transactions?limit=25&offset=0`),
+        api<AccountAllowance>(`accounts/${accountNumber}`),
+      ]);
       setTransactions(rows);
+      setAccountAllowance(account);
     });
+  }
+
+  async function refreshAccountAllowance(accountNumber: string) {
+    if (!/^\d{10}$/.test(accountNumber)) {
+      setAccountAllowance(null);
+      return;
+    }
+    setAccountAllowance(await api<AccountAllowance>(`accounts/${accountNumber}`));
   }
 
   async function openStatementModal(accountNumber: string) {
@@ -400,15 +524,25 @@ export default function Home() {
   async function submitMoney(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
     await run(async () => {
-      await api(`accounts/${moneyAccount}/${action === "DEPOSIT" ? "deposits" : "withdrawals"}`, {
+      const result = await api<OperationResult>(`accounts/${moneyAccount}/${action === "DEPOSIT" ? "deposits" : "withdrawals"}`, {
         method: "POST",
         headers: { "Idempotency-Key": operationKey() },
         body: JSON.stringify({ amount, memo: moneyMemo.trim() }),
+      });
+      setReceipt({
+        transaction_id: result.transaction_id,
+        type: action,
+        amount,
+        accounts: result.account_numbers,
+        balances: result.balances,
+        memo: moneyMemo.trim(),
+        created_at: new Date().toISOString(),
       });
       setNotice(`${action === "DEPOSIT" ? "Deposit" : "Withdrawal"} of ₹${amount} posted successfully to PostgreSQL.`);
       setAmount("");
       setMoneyMemo("");
       await loadDashboard();
+      await refreshAccountAllowance(moneyAccount);
       if (selectedAccount) await selectAccount(selectedAccount);
     });
   }
@@ -416,7 +550,7 @@ export default function Home() {
   async function submitTransfer(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
     await run(async () => {
-      await api("transfers", {
+      const result = await api<OperationResult>("transfers", {
         method: "POST",
         headers: { "Idempotency-Key": operationKey() },
         body: JSON.stringify({
@@ -425,6 +559,15 @@ export default function Home() {
           amount: transferAmount,
           memo: transferMemo.trim(),
         }),
+      });
+      setReceipt({
+        transaction_id: result.transaction_id,
+        type: "TRANSFER",
+        amount: transferAmount,
+        accounts: result.account_numbers,
+        balances: result.balances,
+        memo: transferMemo.trim(),
+        created_at: new Date().toISOString(),
       });
       setNotice(`Transfer of ₹${transferAmount} posted to PostgreSQL ledger.`);
       setTransferAmount("");
@@ -742,11 +885,31 @@ export default function Home() {
 
   async function logout() {
     await run(async () => {
-      await fetch("/api/auth/logout", { method: "POST" });
-      setStaff(null);
-      setSummary(null);
-      setAccounts([]);
-      setTransactions([]);
+      const sessionId = activeSessionId;
+      await fetch("/api/auth/logout", {
+        method: "POST",
+        headers: sessionId && sessionId !== "legacy" ? { "X-Banking-Session": sessionId } : {},
+      });
+      const remainingSessions = staffSessions.filter((session) => session.id !== sessionId);
+      setStoredStaffSessions(remainingSessions);
+      setStaffSessions(remainingSessions);
+      if (remainingSessions.length) {
+        const nextSession = remainingSessions[0];
+        window.sessionStorage.setItem(ACTIVE_STAFF_SESSION_KEY, nextSession.id);
+        window.localStorage.setItem(ACTIVE_STAFF_SESSION_KEY, nextSession.id);
+        setActiveSessionId(nextSession.id);
+        const currentStaff = await api<Staff>("auth/me");
+        setStaff(currentStaff);
+        await loadStaffWorkspace(currentStaff);
+      } else {
+        window.sessionStorage.removeItem(ACTIVE_STAFF_SESSION_KEY);
+        window.localStorage.removeItem(ACTIVE_STAFF_SESSION_KEY);
+        setActiveSessionId(null);
+        setStaff(null);
+        setSummary(null);
+        setAccounts([]);
+        setTransactions([]);
+      }
     });
   }
 
@@ -802,13 +965,17 @@ export default function Home() {
         <div className="brand">
           <div className="brand-mark small">B</div>
           <div>
-            <strong>Banking Operations</strong>
-            <span className="live-badge">
-              <span className="live-dot" /> PostgreSQL Active
-            </span>
+            <strong>SHIVA Banking</strong>
+            <span>Operations workspace</span>
           </div>
         </div>
         <div className="staff-menu">
+          <select className="session-select" aria-label="Active staff session" value={activeSessionId ?? ""} onChange={(event) => switchStaffSession(event.target.value)}>
+            {staffSessions.map((session) => <option key={session.id} value={session.id}>{session.staff.full_name} · {session.staff.role}</option>)}
+          </select>
+          <button className="button-secondary add-session-button" onClick={() => setSessionLoginOpen(true)} disabled={busy} title="Sign in another staff account">
+            <UserRoundPlus size={16} /> Add login
+          </button>
           <div className="staff-avatar">{staff.full_name.slice(0, 1).toUpperCase()}</div>
           <div className="staff-meta">
             <strong>{staff.full_name}</strong>
@@ -823,16 +990,29 @@ export default function Home() {
             Change Password
           </button>
           <button className="button-quiet" onClick={logout} disabled={busy}>
-            Sign out
+            Sign out this session
           </button>
         </div>
       </header>
 
+      <div className="app-layout">
+        <aside className="sidebar" aria-label="Main navigation">
+          <p className="sidebar-label">WORKSPACE</p>
+          <nav className="menu-list">
+            <button className={`menu-item ${activeTab === "DASHBOARD" ? "active" : ""}`} aria-current={activeTab === "DASHBOARD" ? "page" : undefined} onClick={() => setActiveTab("DASHBOARD")}><LayoutDashboard size={18} /><span>Overview & accounts</span></button>
+            <button className={`menu-item ${activeTab === "LENDING" ? "active" : ""}`} aria-current={activeTab === "LENDING" ? "page" : undefined} onClick={() => { setActiveTab("LENDING"); run(loadProducts); }}><Landmark size={18} /><span>Loans & deposits</span></button>
+            {staff.role !== "AUDITOR" && <button className={`menu-item ${activeTab === "CUSTOMERS" ? "active" : ""}`} aria-current={activeTab === "CUSTOMERS" ? "page" : undefined} onClick={() => setActiveTab("CUSTOMERS")}><UsersRound size={18} /><span>Customer services</span></button>}
+            {(staff.role === "ADMIN" || staff.role === "AUDITOR") && <button className={`menu-item ${activeTab === "AUDIT" ? "active" : ""}`} aria-current={activeTab === "AUDIT" ? "page" : undefined} onClick={() => { setActiveTab("AUDIT"); setAuditView("AUDIT"); run(loadAuditLogs); }}><ShieldCheck size={18} /><span>Audit & notifications</span></button>}
+            {(staff.role === "ADMIN" || staff.role === "AUDITOR") && <button className={`menu-item ${activeTab === "RECONCILIATION" ? "active" : ""}`} aria-current={activeTab === "RECONCILIATION" ? "page" : undefined} onClick={() => setActiveTab("RECONCILIATION")}><Scale size={18} /><span>Reconciliation</span></button>}
+          </nav>
+          <div className="sidebar-role"><ChartNoAxesColumn size={16} /><span>{staff.role} access</span></div>
+        </aside>
+        <div className="content-stage">
       <section className="page-heading">
         <div>
-          <p className="eyebrow">POSTGRESQL ENTERPRISE LEDGER</p>
+          <p className="eyebrow">BANKING OPERATIONS</p>
           <h1>Good day, {staff.full_name}</h1>
-          <p className="muted">Direct PostgreSQL ledger storage with double-entry reconciliation.</p>
+          <p className="muted">Accounts, customers, lending and controls.</p>
         </div>
         <button className="button-secondary" onClick={() => run(loadDashboard)} disabled={busy}>
           Refresh data
@@ -841,52 +1021,6 @@ export default function Home() {
 
       {error && <p className="alert error">{error}</p>}
       {notice && <p className="alert success">{notice}</p>}
-
-      <nav className="tabs">
-        <button
-          className={`tab-btn ${activeTab === "DASHBOARD" ? "active" : ""}`}
-          onClick={() => setActiveTab("DASHBOARD")}
-        >
-          Banking Operations
-        </button>
-        <button
-          className={`tab-btn ${activeTab === "LENDING" ? "active" : ""}`}
-          onClick={() => {
-            setActiveTab("LENDING");
-            run(loadProducts);
-          }}
-        >
-          Loans & Deposits
-        </button>
-        {staff.role !== "AUDITOR" && (
-          <button
-            className={`tab-btn ${activeTab === "CUSTOMERS" ? "active" : ""}`}
-            onClick={() => setActiveTab("CUSTOMERS")}
-          >
-            Customer Services
-          </button>
-        )}
-        {(staff.role === "ADMIN" || staff.role === "AUDITOR") && (
-          <button
-            className={`tab-btn ${activeTab === "AUDIT" ? "active" : ""}`}
-            onClick={() => {
-              setActiveTab("AUDIT");
-              setAuditView("AUDIT");
-              run(loadAuditLogs);
-            }}
-          >
-            Audit & Notifications
-          </button>
-        )}
-        {(staff.role === "ADMIN" || staff.role === "AUDITOR") && (
-          <button
-            className={`tab-btn ${activeTab === "RECONCILIATION" ? "active" : ""}`}
-            onClick={() => setActiveTab("RECONCILIATION")}
-          >
-            Reconciliation
-          </button>
-        )}
-      </nav>
 
       {activeTab === "DASHBOARD" && (
         <>
@@ -1123,7 +1257,14 @@ export default function Home() {
                       <option value="WITHDRAWAL">Withdrawal</option>
                     </select>
                   </label>
-                  <label>Account number<input inputMode="numeric" pattern="[0-9]{10}" value={moneyAccount} onChange={(event) => setMoneyAccount(event.target.value)} placeholder="10-digit account number" required /></label>
+                  <label>Account number<input inputMode="numeric" pattern="[0-9]{10}" value={moneyAccount} onChange={(event) => { setMoneyAccount(event.target.value); setAccountAllowance(null); }} onBlur={() => run(() => refreshAccountAllowance(moneyAccount))} placeholder="10-digit account number" required /></label>
+                  {action === "WITHDRAWAL" && accountAllowance && (
+                    <div className="daily-limit" aria-live="polite">
+                      <span>Daily withdrawal cap</span><strong>₹{accountAllowance.daily_withdrawal_limit}</strong>
+                      <span>Used today</span><strong>₹{accountAllowance.daily_withdrawn_today}</strong>
+                      <span>Remaining</span><strong>₹{accountAllowance.daily_withdrawal_remaining}</strong>
+                    </div>
+                  )}
                   <label>Amount (₹)<input inputMode="decimal" value={amount} onChange={(event) => setAmount(event.target.value)} placeholder="0.00" required /></label>
                   <label>Remark / Note (Optional)<input value={moneyMemo} onChange={(event) => setMoneyMemo(event.target.value)} placeholder="e.g. Salary, Monthly rent, Cash deposit" /></label>
                   <button disabled={busy}>Post {action.toLowerCase()} to PostgreSQL</button>
@@ -1134,7 +1275,14 @@ export default function Home() {
                 <h2>Transfer funds</h2>
                 <p className="muted">Atomic double-entry transfer between active accounts.</p>
                 <form className="stack" onSubmit={submitTransfer}>
-                  <label>From account<input inputMode="numeric" pattern="[0-9]{10}" value={sender} onChange={(event) => setSender(event.target.value)} placeholder="Sender 10-digit account" required /></label>
+                  <label>From account<input inputMode="numeric" pattern="[0-9]{10}" value={sender} onChange={(event) => { setSender(event.target.value); setAccountAllowance(null); }} onBlur={() => run(() => refreshAccountAllowance(sender))} placeholder="Sender 10-digit account" required /></label>
+                  {accountAllowance && (
+                    <div className="daily-limit" aria-live="polite">
+                      <span>Daily outgoing cap</span><strong>₹{accountAllowance.daily_withdrawal_limit}</strong>
+                      <span>Used today</span><strong>₹{accountAllowance.daily_withdrawn_today}</strong>
+                      <span>Remaining</span><strong>₹{accountAllowance.daily_withdrawal_remaining}</strong>
+                    </div>
+                  )}
                   <label>To account<input inputMode="numeric" pattern="[0-9]{10}" value={receiver} onChange={(event) => setReceiver(event.target.value)} placeholder="Receiver 10-digit account" required /></label>
                   <label>Amount (₹)<input inputMode="decimal" value={transferAmount} onChange={(event) => setTransferAmount(event.target.value)} placeholder="0.00" required /></label>
                   <label>Transfer remark (Optional)<input value={transferMemo} onChange={(event) => setTransferMemo(event.target.value)} placeholder="e.g. Invoice #203, Vendor payment" /></label>
@@ -1458,6 +1606,36 @@ export default function Home() {
           )}
         </section>
       )}
+        </div>
+      </div>
+
+      {receipt && (
+        <div className="modal-overlay receipt-overlay" onClick={() => setReceipt(null)}>
+          <section className="modal-box receipt-card" role="dialog" aria-modal="true" aria-labelledby="receipt-title" onClick={(event) => event.stopPropagation()}>
+            <div className="modal-head">
+              <div><p className="eyebrow">SHIVA BANK · SIMULATED RECEIPT</p><h2 id="receipt-title">{receipt.type} receipt</h2></div>
+              <button className="modal-close" onClick={() => setReceipt(null)} aria-label="Close receipt">✕</button>
+            </div>
+            <div className="receipt-amount"><span>Amount posted</span><strong>₹{receipt.amount}</strong></div>
+            <dl className="receipt-details">
+              <dt>Reference</dt><dd className="mono">{receipt.transaction_id}</dd>
+              <dt>Date and time</dt><dd>{new Date(receipt.created_at).toLocaleString()}</dd>
+              {receipt.accounts.map((accountNumber, index) => (
+                <Fragment key={`${accountNumber}-${index}`}>
+                  <dt>{receipt.accounts.length === 2 ? (index === 0 ? "From account" : "To account") : "Account"}</dt>
+                  <dd className="mono">{accountNumber} · balance ₹{receipt.balances[index]}</dd>
+                </Fragment>
+              ))}
+              <dt>Remark</dt><dd>{receipt.memo || "—"}</dd>
+              <dt>Status</dt><dd><span className="status status-active">POSTED</span></dd>
+            </dl>
+            <div className="row-actions receipt-actions">
+              <button className="button-secondary" onClick={() => window.print()}>Print / Save PDF</button>
+              <button onClick={() => setReceipt(null)}>Done</button>
+            </div>
+          </section>
+        </div>
+      )}
 
       {/* Dynamic Statement Modal */}
       {statementAccount && (
@@ -1589,6 +1767,22 @@ export default function Home() {
                 </tbody>
               </table>
             </div>
+          </div>
+        </div>
+      )}
+
+      {sessionLoginOpen && (
+        <div className="modal-overlay" onClick={() => setSessionLoginOpen(false)}>
+          <div className="modal-box session-modal" role="dialog" aria-modal="true" aria-labelledby="session-login-title" onClick={(event) => event.stopPropagation()}>
+            <div className="modal-head">
+              <div><p className="eyebrow">INDEPENDENT STAFF SESSION</p><h2 id="session-login-title">Add staff login</h2></div>
+              <button className="modal-close" onClick={() => setSessionLoginOpen(false)} aria-label="Close">✕</button>
+            </div>
+            <form className="stack" onSubmit={addStaffSession}>
+              <label>Username<input autoComplete="username" value={sessionUsername} onChange={(event) => setSessionUsername(event.target.value)} required /></label>
+              <label>Password<input type="password" autoComplete="current-password" value={sessionPassword} onChange={(event) => setSessionPassword(event.target.value)} required /></label>
+              <button disabled={busy}>{busy ? "Signing in…" : "Sign in and keep current session"}</button>
+            </form>
           </div>
         </div>
       )}

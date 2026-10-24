@@ -577,6 +577,7 @@ def account_details(
     account_number: str,
     actor: Annotated[object, Depends(require_roles("ADMIN", "TELLER", "AUDITOR"))],
     session: Annotated[Session, Depends(get_db)],
+    settings: Annotated[Settings, Depends(get_settings)],
 ):
     account = session.scalar(
         select(Account).where(Account.account_number == account_number)
@@ -586,6 +587,9 @@ def account_details(
     customer = session.get(Customer, account.customer_id)
     if customer is None:
         raise HTTPException(status_code=500, detail="Account owner record is missing.")
+    service = _service(session, settings)
+    daily_limit_minor = service._effective_daily_withdrawal_limit(account)
+    daily_used_minor = service._today_withdrawn(account.id) if daily_limit_minor else 0
     session.add(
         AuditEvent(
             actor_id=actor.id,
@@ -614,9 +618,11 @@ def account_details(
         "status": account.status,
         "balance": f"{Decimal(account.balance_minor) / 100:.2f}",
         "interest_rate_annual": str(account.interest_rate_annual),
-        "daily_withdrawal_limit": (
-            f"{Decimal(account.daily_withdrawal_limit_minor) / 100:.2f}"
-            if account.daily_withdrawal_limit_minor > 0
+        "daily_withdrawal_limit": f"{Decimal(daily_limit_minor) / 100:.2f}" if daily_limit_minor else "No limit",
+        "daily_withdrawn_today": f"{Decimal(daily_used_minor) / 100:.2f}",
+        "daily_withdrawal_remaining": (
+            f"{Decimal(max(daily_limit_minor - daily_used_minor, 0)) / 100:.2f}"
+            if daily_limit_minor
             else "No limit"
         ),
         "customer": customer_response,

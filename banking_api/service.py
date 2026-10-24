@@ -34,6 +34,7 @@ IFSC = "SHIV0000001"
 MIN_OPENING_BALANCE_MINOR = 200_000  # Rs. 2000
 CLEARING_ACCOUNT_CODE = "SYSTEM:CASH_CLEARING"
 INTEREST_EXPENSE_CODE = "SYSTEM:INTEREST_EXPENSE"
+SAVINGS_DAILY_WITHDRAWAL_LIMIT_MINOR = 50_000_000
 LOAN_RECEIVABLE_CODE = "SYSTEM:LOAN_RECEIVABLE"
 FD_LIABILITY_CODE = "SYSTEM:FD_LIABILITY"
 
@@ -219,12 +220,13 @@ class BankingService:
                 if amount_minor > account.balance_minor:
                     raise BankingError("Insufficient funds.")
                 # Daily withdrawal limit check
-                if account.daily_withdrawal_limit_minor > 0:
+                withdrawal_limit = self._effective_daily_withdrawal_limit(account)
+                if withdrawal_limit > 0:
                     today_withdrawn = self._today_withdrawn(account.id)
-                    if today_withdrawn + amount_minor > account.daily_withdrawal_limit_minor:
+                    if today_withdrawn + amount_minor > withdrawal_limit:
                         raise BankingError(
                             f"Daily withdrawal limit of Rs."
-                            f"{account.daily_withdrawal_limit_minor / 100:.2f} exceeded."
+                            f"{withdrawal_limit / 100:.2f} exceeded."
                         )
                 account.balance_minor -= amount_minor
                 postings = [(customer_ledger, amount_minor), (clearing, -amount_minor)]
@@ -285,12 +287,13 @@ class BankingService:
             if sender.balance_minor < amount_minor:
                 raise BankingError("Insufficient funds.")
             # Daily limit check for sender
-            if sender.daily_withdrawal_limit_minor > 0:
+            withdrawal_limit = self._effective_daily_withdrawal_limit(sender)
+            if withdrawal_limit > 0:
                 today_withdrawn = self._today_withdrawn(sender.id)
-                if today_withdrawn + amount_minor > sender.daily_withdrawal_limit_minor:
+                if today_withdrawn + amount_minor > withdrawal_limit:
                     raise BankingError(
                         f"Daily transfer limit of Rs."
-                        f"{sender.daily_withdrawal_limit_minor / 100:.2f} exceeded."
+                        f"{withdrawal_limit / 100:.2f} exceeded."
                     )
             sender.balance_minor -= amount_minor
             receiver.balance_minor += amount_minor
@@ -953,6 +956,16 @@ class BankingService:
             )
         )
         return result or 0
+
+    @staticmethod
+    def _effective_daily_withdrawal_limit(account: Account) -> int:
+        configured_limit = account.daily_withdrawal_limit_minor
+        if account.account_type == "SAVINGS":
+            return min(
+                configured_limit or SAVINGS_DAILY_WITHDRAWAL_LIMIT_MINOR,
+                SAVINGS_DAILY_WITHDRAWAL_LIMIT_MINOR,
+            )
+        return configured_limit
 
     def _begin_operation(self, actor_id, key, kind, request):
         if not key or len(key) > 128:

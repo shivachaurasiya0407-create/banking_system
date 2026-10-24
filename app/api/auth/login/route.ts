@@ -1,10 +1,15 @@
 import { NextRequest, NextResponse } from "next/server";
 
 const API_URL = (process.env.BANKING_API_URL ?? "http://127.0.0.1:8000").replace(/\/+$/, "");
+const SESSION_ID = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
 
 export async function POST(request: NextRequest) {
   if (request.headers.get("origin") !== request.nextUrl.origin) {
     return NextResponse.json({ detail: "Invalid request origin." }, { status: 403 });
+  }
+  const sessionId = request.headers.get("x-banking-session");
+  if (sessionId && !SESSION_ID.test(sessionId)) {
+    return NextResponse.json({ detail: "Invalid staff session selector." }, { status: 400 });
   }
 
   let credentials: unknown;
@@ -41,7 +46,7 @@ export async function POST(request: NextRequest) {
       { expires_in: payload.expires_in, role: payload.role },
       { headers: { "Cache-Control": "no-store" } },
     );
-    response.cookies.set("banking_session", payload.access_token, {
+    response.cookies.set(sessionId ? `banking_session_${sessionId}` : "banking_session", payload.access_token, {
       httpOnly: true,
       secure: process.env.NODE_ENV === "production",
       sameSite: "strict",

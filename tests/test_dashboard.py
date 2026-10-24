@@ -8,7 +8,7 @@ from sqlalchemy.pool import StaticPool
 
 from banking_api.app import app
 from banking_api.auth import get_current_staff, get_db, get_settings
-from banking_api.models import Account, Base, Branch, Customer, StaffUser
+from banking_api.models import Account, Base, Branch, Customer, LedgerAccount, StaffUser
 from banking_api.settings import Settings
 
 
@@ -194,6 +194,58 @@ def test_teller_cannot_create_branches(dashboard_client):
     )
 
     assert response.status_code == 403
+
+
+def test_savings_daily_cap_is_shared_by_withdrawals_and_transfers(dashboard_client):
+    client, _, session = dashboard_client
+    sender = session.query(Account).filter_by(account_number="1000000001").one()
+    receiver = session.query(Account).filter_by(account_number="1000000002").one()
+    sender.balance_minor = 60_000_000
+    receiver.status = "ACTIVE"
+    session.add_all(
+        [
+            LedgerAccount(
+                code=f"TEST:{sender.account_number}",
+                account_type="CUSTOMER_DEPOSIT",
+                account_id=sender.id,
+            ),
+            LedgerAccount(
+                code=f"TEST:{receiver.account_number}",
+                account_type="CUSTOMER_DEPOSIT",
+                account_id=receiver.id,
+            ),
+        ]
+    )
+    session.commit()
+
+    withdrawal = client.post(
+        "/accounts/1000000001/withdrawals",
+        headers={"Idempotency-Key": "daily-limit-withdrawal"},
+        json={"amount": "300000.00"},
+    )
+    transfer = client.post(
+        "/transfers",
+        headers={"Idempotency-Key": "daily-limit-transfer"},
+        json={
+            "sender_account": "1000000001",
+            "receiver_account": "1000000002",
+            "amount": "200000.00",
+        },
+    )
+    over_limit = client.post(
+        "/accounts/1000000001/withdrawals",
+        headers={"Idempotency-Key": "daily-limit-over"},
+        json={"amount": "0.01"},
+    )
+
+    assert withdrawal.status_code == 200, withdrawal.json()
+    assert transfer.status_code == 200
+    assert over_limit.status_code == 400
+    assert "500000.00" in over_limit.json()["detail"]
+    limit = client.get("/accounts/1000000001")
+    assert limit.json()["daily_withdrawal_limit"] == "500000.00"
+    assert limit.json()["daily_withdrawn_today"] == "500000.00"
+    assert limit.json()["daily_withdrawal_remaining"] == "0.00"
 
 
 def test_audit_logs_endpoint(dashboard_client):

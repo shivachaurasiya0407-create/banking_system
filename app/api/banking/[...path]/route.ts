@@ -3,6 +3,7 @@ import { NextRequest, NextResponse } from "next/server";
 const API_URL = (process.env.BANKING_API_URL ?? "http://127.0.0.1:8000").replace(/\/+$/, "");
 const UUID = "[0-9a-fA-F-]{36}";
 const ACCOUNT = "[0-9]{10}";
+const SESSION_ID = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
 
 function isAllowed(path: string, method: string) {
   if (method === "GET") {
@@ -12,7 +13,7 @@ function isAllowed(path: string, method: string) {
       path === "branches" ||
       path === "metadata/india-states" ||
       path === "accounts" ||
-      new RegExp(`^accounts/${ACCOUNT}(?:/balance|/transactions|/statement|/statement\\.csv)?$`).test(path) ||
+      new RegExp(`^accounts/${ACCOUNT}(?:$|/balance|/transactions|/statement|/statement\\.csv)$`).test(path) ||
       path === "admin/reconciliation" ||
       path === "admin/audit-logs" ||
       path === "admin/notifications" ||
@@ -64,7 +65,12 @@ async function proxy(
     return NextResponse.json({ detail: "Not found." }, { status: 404 });
   }
 
-  const token = request.cookies.get("banking_session")?.value;
+  const sessionId = request.headers.get("x-banking-session");
+  if (sessionId && !SESSION_ID.test(sessionId)) {
+    return NextResponse.json({ detail: "Invalid staff session selector." }, { status: 400 });
+  }
+  const cookieName = sessionId ? `banking_session_${sessionId}` : "banking_session";
+  const token = request.cookies.get(cookieName)?.value;
   if (!token) {
     return NextResponse.json({ detail: "Authentication required." }, { status: 401 });
   }
@@ -95,7 +101,7 @@ async function proxy(
       headers: responseHeaders,
     });
     if (upstream.status === 401) {
-      response.cookies.set("banking_session", "", {
+      response.cookies.set(cookieName, "", {
         httpOnly: true,
         secure: process.env.NODE_ENV === "production",
         sameSite: "strict",
