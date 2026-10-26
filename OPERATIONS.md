@@ -29,26 +29,21 @@ Ensure PostgreSQL is running locally on port `5432` with credentials matching `.
 POSTGRES_PASSWORD=Shiva123@
 DATABASE_URL=postgresql+psycopg://postgres:Shiva123%40@localhost:5432/banking_system
 ```
-Apply migrations if starting with a fresh database:
+`npm run dev` applies pending database migrations before starting the API and portal. To apply them manually:
 ```powershell
 .\.venv\Scripts\alembic.exe upgrade head
 ```
 
-### 2. Start the Backend API (FastAPI)
-Run the Python backend server on `http://127.0.0.1:8000`:
-```powershell
-.\.venv\Scripts\python.exe main.py
-```
-Health & Readiness endpoints:
-- `http://127.0.0.1:8000/healthz`
-- `http://127.0.0.1:8000/readyz`
-
-### 3. Start the Web Portal (Next.js)
-Open a second terminal window and run:
+### 2. Start the API and Web Portal Together
+From the project folder, run:
 ```powershell
 npm run dev
 ```
-Open your browser and navigate to `http://localhost:3000`.
+This starts both the private FastAPI service and the Next.js portal. The terminal prints the current private IPv4 address and the matching portal URL each time it starts, so use that address rather than a previously saved IP. The portal listens on all network adapters; the API remains private to the host and browser requests reach it through the portal.
+
+If another device cannot connect, make sure it is on the same trusted Wi-Fi/LAN and allow Node.js/Next.js through Windows Firewall on **Private networks** for TCP port `3000`. You can check the host's current address with `ipconfig`. Keep the network profile private, do not expose this prototype or its ports to the public internet, and use synthetic customer data only. The API and PostgreSQL database are not directly exposed to other devices.
+
+To stop both services, press `Ctrl+C` in the terminal running `npm run dev`.
 
 Sign in with:
 - **Username**: `shiva`
@@ -79,11 +74,18 @@ Sign in with:
 5. **Self-Service Password Management**:
    - Authenticated staff can securely change their own password via `Change Password` in the topbar.
    - Requires passwords to be 12–256 characters; long passphrases are accepted without character-composition rules.
+   - Each staff account can have one active device session. Sign out to release it; an administrator can review/revoke active staff sessions.
+   - Staff sign-ins include timestamp and browser information in the administrative audit trail.
 
-6. **Account Filters & Controls**:
+6. **KYC Operation Lock**:
+   - Newly opened customer accounts remain locked while KYC is pending.
+   - Account transactions, loan/FD operations, account status changes, and profile updates require verified KYC.
+   - Rejected KYC is terminal and cannot be edited or re-approved.
+
+7. **Account Filters & Controls**:
    - Filter customer accounts by status: `All`, `Active`, `Frozen`, `Closed`.
    - Search accounts by account number or customer name.
    - Instant freeze / unfreeze toggles.
 
-7. **Security Headers & Protection**:
+8. **Security Headers & Protection**:
    - Enforces `X-Frame-Options: DENY`, `X-Content-Type-Options: nosniff`, `X-XSS-Protection`, strict CORS origin checks, and HttpOnly SameSite session cookies.

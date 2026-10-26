@@ -6,7 +6,12 @@ import { ChartNoAxesColumn, LayoutDashboard, Landmark, Scale, ShieldCheck, UserR
 type Role = "ADMIN" | "TELLER" | "AUDITOR";
 type Staff = { id: string; username: string; full_name: string; role: Role };
 type StaffSession = { id: string; staff: Staff };
-type StaffMember = Staff & { active: boolean; created_at?: string };
+type StaffMember = Staff & {
+  active: boolean;
+  created_at?: string;
+  last_login_at?: string | null;
+  signed_in?: boolean;
+};
 type Account = {
   account_number: string;
   ifsc: string;
@@ -20,6 +25,7 @@ type AccountAllowance = {
   daily_withdrawal_limit: string;
   daily_withdrawn_today: string;
   daily_withdrawal_remaining: string;
+  kyc_status: string;
 };
 type OperationResult = {
   transaction_id: string;
@@ -46,6 +52,7 @@ type Summary = {
 type Loan = {
   loan_id: string;
   customer_name: string;
+  kyc_status: string;
   loan_type: string;
   status: string;
   principal: string;
@@ -59,6 +66,7 @@ type Loan = {
 type FixedDeposit = {
   fd_id: string;
   customer_name: string;
+  kyc_status: string;
   status: string;
   principal: string;
   interest_rate_annual: string;
@@ -132,6 +140,7 @@ type AuditLog = {
   metadata: Record<string, unknown>;
   created_at: string;
 };
+type OperationView = "ACCOUNT_OPENING" | "CASH" | "TRANSFER" | "ADMIN";
 
 const STAFF_SESSIONS_KEY = "shiva_staff_sessions";
 const ACTIVE_STAFF_SESSION_KEY = "shiva_active_staff_session";
@@ -144,6 +153,7 @@ function storedStaffSessions(): StaffSession[] {
   } catch {
     return [];
   }
+
 }
 
 function setStoredStaffSessions(sessions: StaffSession[]) {
@@ -206,11 +216,13 @@ export default function Home() {
   const [transactions, setTransactions] = useState<Transaction[]>([]);
   const [reconciliation, setReconciliation] = useState<string>("");
   const [staffMembers, setStaffMembers] = useState<StaffMember[]>([]);
+  const [accountKyc, setAccountKyc] = useState<Record<string, string>>({});
+  const [operationView, setOperationView] = useState<OperationView>("ACCOUNT_OPENING");
 
   // Navigation tab
   const [activeTab, setActiveTab] = useState<
-    "DASHBOARD" | "LENDING" | "CUSTOMERS" | "AUDIT" | "RECONCILIATION"
-  >("DASHBOARD");
+    "HOME" | "DASHBOARD" | "OPERATIONS" | "LENDING" | "CUSTOMERS" | "AUDIT" | "RECONCILIATION"
+  >("HOME");
   const [loans, setLoans] = useState<Loan[]>([]);
   const [fixedDeposits, setFixedDeposits] = useState<FixedDeposit[]>([]);
   const [customerDetails, setCustomerDetails] = useState<CustomerDetails | null>(null);
@@ -265,6 +277,10 @@ export default function Home() {
   const [customerFirst, setCustomerFirst] = useState("");
   const [customerLast, setCustomerLast] = useState("");
   const [customerPhone, setCustomerPhone] = useState("");
+  const [customerEmail, setCustomerEmail] = useState("");
+  const [customerAddress, setCustomerAddress] = useState("");
+  const [customerCity, setCustomerCity] = useState("");
+  const [customerPin, setCustomerPin] = useState("");
   const [customerAge, setCustomerAge] = useState("18");
   const [customerState, setCustomerState] = useState("");
   const [identityNumber, setIdentityNumber] = useState("");
@@ -291,8 +307,11 @@ export default function Home() {
   // Audit logs state
   const [auditLogs, setAuditLogs] = useState<AuditLog[]>([]);
   const [auditSearch, setAuditSearch] = useState("");
+  const [auditOffset, setAuditOffset] = useState(0);
   const [notifications, setNotifications] = useState<NotificationLog[]>([]);
-  const [auditView, setAuditView] = useState<"AUDIT" | "NOTIFICATIONS">("AUDIT");
+  const [auditView, setAuditView] = useState<
+    "MY_ACTIVITY" | "AUDIT" | "NOTIFICATIONS"
+  >("MY_ACTIVITY");
 
   const loadDashboard = useCallback(async () => {
     const [nextSummary, nextAccounts, nextBranches, nextStates] = await Promise.all([
@@ -303,6 +322,10 @@ export default function Home() {
     ]);
     setSummary(nextSummary);
     setAccounts(nextAccounts.items);
+    setAccountKyc(Object.fromEntries(nextAccounts.items.map((account) => [
+      account.account_number,
+      account.kyc_status ?? "PENDING",
+    ])));
     setBranches(nextBranches);
     setStates(nextStates);
   }, []);
@@ -320,10 +343,15 @@ export default function Home() {
     setFixedDeposits(nextFixedDeposits);
   }, []);
 
-  const loadAuditLogs = useCallback(async (actionFilter = "") => {
-    const params = new URLSearchParams({ limit: "50", offset: "0" });
+  const loadActivityLogs = useCallback(async (
+    scope: "mine" | "all",
+    actionFilter = "",
+    offset = 0,
+  ) => {
+    const params = new URLSearchParams({ limit: "100", offset: String(offset) });
     if (actionFilter.trim()) params.set("action", actionFilter.trim());
-    const logs = await api<AuditLog[]>(`admin/audit-logs?${params}`);
+    const endpoint = scope === "mine" ? "staff/audit-logs" : "admin/audit-logs";
+    const logs = await api<AuditLog[]>(`${endpoint}?${params}`);
     setAuditLogs(logs);
   }, []);
 
@@ -335,10 +363,8 @@ export default function Home() {
     await Promise.all([loadDashboard(), loadProducts()]);
     if (currentStaff.role === "ADMIN") await loadStaff();
     else setStaffMembers([]);
-    if (currentStaff.role === "ADMIN" || currentStaff.role === "AUDITOR") {
-      await loadAuditLogs();
-    } else {
-      setAuditLogs([]);
+    await loadActivityLogs("mine");
+    if (currentStaff.role !== "ADMIN" && currentStaff.role !== "AUDITOR") {
       setNotifications([]);
     }
   }
@@ -386,7 +412,7 @@ export default function Home() {
         }
         setStaff(null);
       });
-  }, [loadDashboard, loadProducts, loadStaff, loadAuditLogs]);
+  }, [loadDashboard, loadProducts, loadStaff, loadActivityLogs]);
 
   async function run(actionToRun: () => Promise<void>) {
     setBusy(true);
@@ -469,6 +495,10 @@ export default function Home() {
       if (query.trim()) params.set("q", query.trim());
       const result = await api<{ items: Account[] }>(`accounts?${params}`);
       setAccounts(result.items);
+      setAccountKyc(Object.fromEntries(result.items.map((account) => [
+        account.account_number,
+        account.kyc_status ?? "PENDING",
+      ])));
     });
   }
 
@@ -482,6 +512,7 @@ export default function Home() {
       ]);
       setTransactions(rows);
       setAccountAllowance(account);
+      setAccountKyc((current) => ({ ...current, [accountNumber]: account.kyc_status }));
     });
   }
 
@@ -490,7 +521,13 @@ export default function Home() {
       setAccountAllowance(null);
       return;
     }
-    setAccountAllowance(await api<AccountAllowance>(`accounts/${accountNumber}`));
+    const details = await api<AccountAllowance>(`accounts/${accountNumber}`);
+    setAccountAllowance(details);
+    setAccountKyc((current) => ({ ...current, [accountNumber]: details.kyc_status }));
+  }
+
+  function kycStatusForAccount(accountNumber: string) {
+    return accountKyc[accountNumber.trim()] ?? "UNKNOWN";
   }
 
   async function openStatementModal(accountNumber: string) {
@@ -538,7 +575,7 @@ export default function Home() {
         memo: moneyMemo.trim(),
         created_at: new Date().toISOString(),
       });
-      setNotice(`${action === "DEPOSIT" ? "Deposit" : "Withdrawal"} of ₹${amount} posted successfully to PostgreSQL.`);
+      setNotice(`${action === "DEPOSIT" ? "Deposit" : "Withdrawal"} of ₹${amount} posted successfully.`);
       setAmount("");
       setMoneyMemo("");
       await loadDashboard();
@@ -569,7 +606,7 @@ export default function Home() {
         memo: transferMemo.trim(),
         created_at: new Date().toISOString(),
       });
-      setNotice(`Transfer of ₹${transferAmount} posted to PostgreSQL ledger.`);
+      setNotice(`Transfer of ₹${transferAmount} posted successfully.`);
       setTransferAmount("");
       setTransferMemo("");
       await loadDashboard();
@@ -615,7 +652,7 @@ export default function Home() {
       setNewUsername("");
       setNewName("");
       setNewPassword("");
-      setNotice("Staff account created in PostgreSQL.");
+      setNotice("Staff account created.");
       await loadStaff();
     });
   }
@@ -635,6 +672,10 @@ export default function Home() {
             country: "India",
             state: customerState,
             identity_number: identityNumber,
+            email: customerEmail || null,
+            address_line1: customerAddress || null,
+            address_city: customerCity || null,
+            address_pin: customerPin || null,
           },
           opening_deposit: openingDeposit,
           branch_ifsc: branchIfsc || branches[0]?.ifsc,
@@ -644,8 +685,12 @@ export default function Home() {
       setCustomerFirst("");
       setCustomerLast("");
       setCustomerPhone("");
+      setCustomerEmail("");
+      setCustomerAddress("");
+      setCustomerCity("");
+      setCustomerPin("");
       setIdentityNumber("");
-      setNotice("New account opened and ledger entry recorded in PostgreSQL.");
+      setNotice("New account opened with KYC pending. Operations unlock after approval.");
       await loadDashboard();
     });
   }
@@ -659,7 +704,7 @@ export default function Home() {
       });
       setBranchCode("");
       setBranchName("");
-      setNotice("Branch saved to PostgreSQL.");
+      setNotice("Branch saved.");
       await loadDashboard();
     });
   }
@@ -668,7 +713,9 @@ export default function Home() {
     await run(async () => {
       const account = await api<{
         customer: CustomerDetails;
+        kyc_status: string;
       }>(`accounts/${accountNumber}`);
+      setAccountKyc((current) => ({ ...current, [accountNumber]: account.kyc_status }));
       setCustomerDetails(account.customer);
       setCustomerAccount(accountNumber);
       setKycStatus(account.customer.kyc_status);
@@ -707,6 +754,7 @@ export default function Home() {
         body: JSON.stringify({ kyc_status: kycStatus }),
       });
       setCustomerDetails({ ...customerDetails, kyc_status: kycStatus });
+      setAccountKyc((current) => ({ ...current, [customerAccount]: kycStatus }));
       setNotice(`KYC status updated to ${kycStatus}.`);
       await loadDashboard();
     });
@@ -840,6 +888,15 @@ export default function Home() {
     });
   }
 
+  async function revokeStaffSession(member: StaffMember) {
+    if (!window.confirm(`Sign out ${member.full_name} from their active device?`)) return;
+    await run(async () => {
+      await api(`staff/${member.id}/session-revoke`, { method: "POST" });
+      setNotice(`Active session for @${member.username} was revoked.`);
+      await loadStaff();
+    });
+  }
+
   async function resetStaffPassword(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
     if (!staffPasswordTarget) return;
@@ -872,24 +929,43 @@ export default function Home() {
       setCurrentPassword("");
       setNewPasswordInput("");
       setConfirmPasswordInput("");
-      setNotice("Password changed successfully. Token version incremented.");
+      const sessionId = activeSessionId;
+      await fetch("/api/auth/logout", {
+        method: "POST",
+        headers: sessionId && sessionId !== "legacy" ? { "X-Banking-Session": sessionId } : {},
+      });
+      setStoredStaffSessions(staffSessions.filter((session) => session.id !== sessionId));
+      window.sessionStorage.removeItem(ACTIVE_STAFF_SESSION_KEY);
+      window.localStorage.removeItem(ACTIVE_STAFF_SESSION_KEY);
+      setStaff(null);
+      setActiveSessionId(null);
+      setNotice("Password changed. Sign in again with your new password.");
     });
   }
 
   async function handleAuditFilter(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
     await run(async () => {
-      await loadAuditLogs(auditSearch);
+      setAuditOffset(0);
+      await loadActivityLogs(
+        auditView === "AUDIT" ? "all" : "mine",
+        auditSearch,
+        0,
+      );
     });
   }
 
   async function logout() {
     await run(async () => {
       const sessionId = activeSessionId;
-      await fetch("/api/auth/logout", {
+      const response = await fetch("/api/auth/logout", {
         method: "POST",
         headers: sessionId && sessionId !== "legacy" ? { "X-Banking-Session": sessionId } : {},
       });
+      if (!response.ok) {
+        const body = (await response.json().catch(() => null)) as { detail?: string } | null;
+        throw new Error(body?.detail ?? "Could not sign out.");
+      }
       const remainingSessions = staffSessions.filter((session) => session.id !== sessionId);
       setStoredStaffSessions(remainingSessions);
       setStaffSessions(remainingSessions);
@@ -923,10 +999,11 @@ export default function Home() {
       <main className="login-shell">
         <section className="login-card">
           <div className="brand-mark">B</div>
-          <p className="eyebrow">POSTGRESQL BANKING OPERATIONS</p>
+          <p className="eyebrow">BANKING OPERATIONS</p>
           <h1>Secure Staff Sign In</h1>
-          <p className="muted">All operations and data are stored securely in PostgreSQL.</p>
+          <p className="muted">Sign in to your secure staff workspace.</p>
           {error && <p className="alert error">{error}</p>}
+          {notice && <p className="alert success">{notice}</p>}
           <form className="stack" onSubmit={login}>
             <label>
               Username
@@ -999,10 +1076,13 @@ export default function Home() {
         <aside className="sidebar" aria-label="Main navigation">
           <p className="sidebar-label">WORKSPACE</p>
           <nav className="menu-list">
-            <button className={`menu-item ${activeTab === "DASHBOARD" ? "active" : ""}`} aria-current={activeTab === "DASHBOARD" ? "page" : undefined} onClick={() => setActiveTab("DASHBOARD")}><LayoutDashboard size={18} /><span>Overview & accounts</span></button>
+            <button className={`menu-item ${activeTab === "HOME" ? "active" : ""}`} aria-current={activeTab === "HOME" ? "page" : undefined} onClick={() => setActiveTab("HOME")}><LayoutDashboard size={18} /><span>Home</span></button>
+            <button className={`menu-item ${activeTab === "DASHBOARD" ? "active" : ""}`} aria-current={activeTab === "DASHBOARD" ? "page" : undefined} onClick={() => setActiveTab("DASHBOARD")}><UsersRound size={18} /><span>Accounts</span></button>
+            {staff.role !== "AUDITOR" && <button className={`menu-item ${activeTab === "OPERATIONS" ? "active" : ""}`} aria-current={activeTab === "OPERATIONS" ? "page" : undefined} onClick={() => setActiveTab("OPERATIONS")}><ChartNoAxesColumn size={18} /><span>Operations</span></button>}
             <button className={`menu-item ${activeTab === "LENDING" ? "active" : ""}`} aria-current={activeTab === "LENDING" ? "page" : undefined} onClick={() => { setActiveTab("LENDING"); run(loadProducts); }}><Landmark size={18} /><span>Loans & deposits</span></button>
             {staff.role !== "AUDITOR" && <button className={`menu-item ${activeTab === "CUSTOMERS" ? "active" : ""}`} aria-current={activeTab === "CUSTOMERS" ? "page" : undefined} onClick={() => setActiveTab("CUSTOMERS")}><UsersRound size={18} /><span>Customer services</span></button>}
-            {(staff.role === "ADMIN" || staff.role === "AUDITOR") && <button className={`menu-item ${activeTab === "AUDIT" ? "active" : ""}`} aria-current={activeTab === "AUDIT" ? "page" : undefined} onClick={() => { setActiveTab("AUDIT"); setAuditView("AUDIT"); run(loadAuditLogs); }}><ShieldCheck size={18} /><span>Audit & notifications</span></button>}
+            <button className={`menu-item ${activeTab === "AUDIT" ? "active" : ""}`} aria-current={activeTab === "AUDIT" ? "page" : undefined} onClick={() => { setActiveTab("AUDIT"); setAuditView("MY_ACTIVITY"); run(() => loadActivityLogs("mine")); }}><ShieldCheck size={18} /><span>My activity</span></button>
+            {(staff.role === "ADMIN" || staff.role === "AUDITOR") && <button className={`menu-item ${activeTab === "AUDIT" && auditView === "AUDIT" ? "active" : ""}`} onClick={() => { setActiveTab("AUDIT"); setAuditView("AUDIT"); run(() => loadActivityLogs("all")); }}><UsersRound size={18} /><span>Staff audit</span></button>}
             {(staff.role === "ADMIN" || staff.role === "AUDITOR") && <button className={`menu-item ${activeTab === "RECONCILIATION" ? "active" : ""}`} aria-current={activeTab === "RECONCILIATION" ? "page" : undefined} onClick={() => setActiveTab("RECONCILIATION")}><Scale size={18} /><span>Reconciliation</span></button>}
           </nav>
           <div className="sidebar-role"><ChartNoAxesColumn size={16} /><span>{staff.role} access</span></div>
@@ -1011,8 +1091,8 @@ export default function Home() {
       <section className="page-heading">
         <div>
           <p className="eyebrow">BANKING OPERATIONS</p>
-          <h1>Good day, {staff.full_name}</h1>
-          <p className="muted">Accounts, customers, lending and controls.</p>
+          <h1>{activeTab === "HOME" ? `Welcome, ${staff.full_name}` : activeTab === "DASHBOARD" ? "Accounts overview" : activeTab === "OPERATIONS" ? "Banking operations" : activeTab === "LENDING" ? "Loans & deposits" : activeTab === "CUSTOMERS" ? "Customer services" : activeTab === "AUDIT" ? "Audit & notifications" : "Reconciliation"}</h1>
+          <p className="muted">{activeTab === "HOME" ? "Choose a service to get started." : "Secure staff workspace · actions are recorded for review."}</p>
         </div>
         <button className="button-secondary" onClick={() => run(loadDashboard)} disabled={busy}>
           Refresh data
@@ -1022,13 +1102,60 @@ export default function Home() {
       {error && <p className="alert error">{error}</p>}
       {notice && <p className="alert success">{notice}</p>}
 
-      {activeTab === "DASHBOARD" && (
+      {activeTab === "HOME" && (
+        <section className="service-picker">
+          <div className="service-picker-heading">
+            <p className="eyebrow">QUICK ACCESS</p>
+            <h2>What would you like to do?</h2>
+            <p className="muted">Choose a task. Customer functions remain locked until KYC is approved.</p>
+          </div>
+          <div className="service-grid">
+            <button className="service-card" onClick={() => setActiveTab("DASHBOARD")}>
+              <span className="service-icon"><UsersRound size={21} /></span>
+              <strong>Find an account</strong>
+              <span>Search accounts, review status and open statements.</span>
+              <span className="service-link">Open accounts <span aria-hidden="true">→</span></span>
+            </button>
+            {staff.role !== "AUDITOR" && (
+              <button className="service-card" onClick={() => setActiveTab("OPERATIONS")}>
+                <span className="service-icon"><ChartNoAxesColumn size={21} /></span>
+                <strong>Open account or transact</strong>
+                <span>Create a customer account, take deposits or manage transfers.</span>
+                <span className="service-link">Open operations <span aria-hidden="true">→</span></span>
+              </button>
+            )}
+            {staff.role !== "AUDITOR" && (
+              <button className="service-card" onClick={() => setActiveTab("CUSTOMERS")}>
+                <span className="service-icon"><ShieldCheck size={21} /></span>
+                <strong>Review customer KYC</strong>
+                <span>Check customer information and manage verification status.</span>
+                <span className="service-link">Review KYC <span aria-hidden="true">→</span></span>
+              </button>
+            )}
+            <button className="service-card" onClick={() => { setActiveTab("LENDING"); run(loadProducts); }}>
+              <span className="service-icon"><Landmark size={21} /></span>
+              <strong>Loans & fixed deposits</strong>
+              <span>Review lending requests and deposit products.</span>
+              <span className="service-link">Open products <span aria-hidden="true">→</span></span>
+            </button>
+            <button className="service-card" onClick={() => { setActiveTab("AUDIT"); setAuditView("MY_ACTIVITY"); run(() => loadActivityLogs("mine")); }}>
+                <span className="service-icon"><Scale size={21} /></span>
+                <strong>My activity</strong>
+                <span>Review your own sign-ins, account operations and changes.</span>
+                <span className="service-link">Open activity <span aria-hidden="true">→</span></span>
+            </button>
+          </div>
+        </section>
+      )}
+
+      {(activeTab === "DASHBOARD" || activeTab === "OPERATIONS") && (
         <>
+          {activeTab === "DASHBOARD" && <>
           <section className="metric-grid">
             <article className="metric-card">
               <span>Total accounts</span>
               <strong>{summary?.accounts.total ?? "—"}</strong>
-              <small>{summary?.accounts.active ?? 0} active in PostgreSQL</small>
+              <small>{summary?.accounts.active ?? 0} active accounts</small>
             </article>
             <article className="metric-card">
               <span>Ledger balance</span>
@@ -1107,17 +1234,19 @@ export default function Home() {
                           {account.status}
                         </span>
                       </td>
-                      <td><span className="status">{account.kyc_status ?? "PENDING"}</span></td>
+                      <td><span className={`status kyc-${(account.kyc_status ?? "PENDING").toLowerCase()}`}>{account.kyc_status ?? "PENDING"}</span></td>
                       <td><strong>₹{account.balance}</strong></td>
                       <td className="row-actions">
                         <button
                           className="text-button"
+                          disabled={account.kyc_status !== "VERIFIED"}
                           onClick={() => selectAccount(account.account_number)}
                         >
                           Activity
                         </button>
                         <button
                           className="text-button"
+                          disabled={account.kyc_status !== "VERIFIED"}
                           onClick={() => openStatementModal(account.account_number)}
                         >
                           Statement
@@ -1137,6 +1266,7 @@ export default function Home() {
                           <>
                             <button
                               className="text-button"
+                              disabled={account.kyc_status !== "VERIFIED"}
                               onClick={() =>
                                 changeStatus(
                                   account.account_number,
@@ -1146,7 +1276,7 @@ export default function Home() {
                             >
                               {account.status === "FROZEN" ? "Unfreeze" : "Freeze"}
                             </button>
-                            <button className="text-button" onClick={() => closeAccount(account)}>
+                            <button className="text-button" disabled={account.kyc_status !== "VERIFIED"} onClick={() => closeAccount(account)}>
                               Close
                             </button>
                           </>
@@ -1169,7 +1299,7 @@ export default function Home() {
               <div className="panel-heading">
                 <div>
                   <h2>Recent activity</h2>
-                  <p className="muted">Live PostgreSQL entries for account {selectedAccount}</p>
+                  <p className="muted">Recent activity for account {selectedAccount}</p>
                 </div>
                 <button
                   className="button-secondary"
@@ -1227,27 +1357,47 @@ export default function Home() {
               </div>
             </section>
           )}
+          </>}
 
-          {(staff.role === "ADMIN" || staff.role === "TELLER") && (
-            <section className="work-grid">
-              <article className="panel">
+          {activeTab === "OPERATIONS" && (staff.role === "ADMIN" || staff.role === "TELLER") && (
+            <>
+            <nav className="operation-selector" aria-label="Choose banking operation">
+              <button className={`pill-btn ${operationView === "ACCOUNT_OPENING" ? "active" : ""}`} aria-pressed={operationView === "ACCOUNT_OPENING"} onClick={() => setOperationView("ACCOUNT_OPENING")}>Open account</button>
+              <button className={`pill-btn ${operationView === "CASH" ? "active" : ""}`} aria-pressed={operationView === "CASH"} onClick={() => setOperationView("CASH")}>Deposit / withdraw</button>
+              <button className={`pill-btn ${operationView === "TRANSFER" ? "active" : ""}`} aria-pressed={operationView === "TRANSFER"} onClick={() => setOperationView("TRANSFER")}>Transfer</button>
+              {staff.role === "ADMIN" && <button className={`pill-btn ${operationView === "ADMIN" ? "active" : ""}`} aria-pressed={operationView === "ADMIN"} onClick={() => setOperationView("ADMIN")}>Administration</button>}
+            </nav>
+            <section className="work-grid operation-work-grid">
+              <article className="panel" hidden={operationView !== "ACCOUNT_OPENING"}>
                 <h2>Open an account</h2>
                 <p className="muted">Identity numbers are cryptographically fingerprinted before saving.</p>
                 <form className="stack" onSubmit={openAccount}>
-                  <label>First name<input value={customerFirst} onChange={(event) => setCustomerFirst(event.target.value)} required /></label>
-                  <label>Last name<input value={customerLast} onChange={(event) => setCustomerLast(event.target.value)} required /></label>
-                  <label>Phone<input inputMode="tel" value={customerPhone} onChange={(event) => setCustomerPhone(event.target.value)} required /></label>
+                  <div className="form-section-label">Personal details</div>
+                  <div className="form-fields-grid">
+                  <label>First name<input autoComplete="given-name" value={customerFirst} onChange={(event) => setCustomerFirst(event.target.value)} required /></label>
+                  <label>Last name<input autoComplete="family-name" value={customerLast} onChange={(event) => setCustomerLast(event.target.value)} required /></label>
+                  <label>Phone<input autoComplete="tel" inputMode="tel" value={customerPhone} onChange={(event) => setCustomerPhone(event.target.value)} required /></label>
+                  <label>Email address<input autoComplete="email" type="email" value={customerEmail} onChange={(event) => setCustomerEmail(event.target.value)} /></label>
                   <label>Age<input type="number" min={18} max={110} value={customerAge} onChange={(event) => setCustomerAge(event.target.value)} required /></label>
                   <label>State / union territory<select value={customerState} onChange={(event) => setCustomerState(event.target.value)} required><option value="">Select a state</option>{states.map((state) => <option key={state} value={state}>{state}</option>)}</select></label>
-                  <label>Identity number (Aadhaar 12-digit)<input inputMode="numeric" pattern="[0-9]{12}" value={identityNumber} onChange={(event) => setIdentityNumber(event.target.value)} required /></label>
+                  <label>Identity number (12-digit)<input inputMode="numeric" pattern="[0-9]{12}" value={identityNumber} onChange={(event) => setIdentityNumber(event.target.value)} required /></label>
+                  </div>
+                  <div className="form-section-label">Address details</div>
+                  <div className="form-fields-grid">
+                  <label className="field-full">Address<input autoComplete="street-address" value={customerAddress} onChange={(event) => setCustomerAddress(event.target.value)} required /></label>
+                  <label>City / district<input autoComplete="address-level2" value={customerCity} onChange={(event) => setCustomerCity(event.target.value)} required /></label>
+                  <label>PIN code<input autoComplete="postal-code" inputMode="numeric" pattern="[0-9]{6}" value={customerPin} onChange={(event) => setCustomerPin(event.target.value)} required /></label>
+                  </div>
+                  <div className="form-section-label">Account setup</div>
                   <label>Branch<select value={branchIfsc} onChange={(event) => setBranchIfsc(event.target.value)} required>{branches.map((branch) => <option key={branch.ifsc} value={branch.ifsc}>{branch.name} · {branch.ifsc}</option>)}</select></label>
                   <label>Account type<select value={accountType} onChange={(event) => setAccountType(event.target.value as "SAVINGS" | "CURRENT" | "SALARY")}><option value="SAVINGS">Savings</option><option value="CURRENT">Current</option><option value="SALARY">Salary</option></select></label>
                   <label>Opening deposit (₹, min 2000)<input inputMode="decimal" value={openingDeposit} onChange={(event) => setOpeningDeposit(event.target.value)} required /></label>
-                  <button disabled={busy}>Open account in PostgreSQL</button>
+                  <div className="kyc-notice">New accounts start with KYC pending. Deposits, withdrawals, transfers and other account services stay disabled until an administrator approves KYC.</div>
+                  <button disabled={busy}>Create account</button>
                 </form>
               </article>
 
-              <article className="panel">
+              <article className="panel" hidden={operationView !== "CASH"}>
                 <h2>Cash operation</h2>
                 <p className="muted">Post a deposit or withdrawal with an optional memo & idempotency.</p>
                 <form className="stack" onSubmit={submitMoney}>
@@ -1258,6 +1408,7 @@ export default function Home() {
                     </select>
                   </label>
                   <label>Account number<input inputMode="numeric" pattern="[0-9]{10}" value={moneyAccount} onChange={(event) => { setMoneyAccount(event.target.value); setAccountAllowance(null); }} onBlur={() => run(() => refreshAccountAllowance(moneyAccount))} placeholder="10-digit account number" required /></label>
+                  {moneyAccount && kycStatusForAccount(moneyAccount) !== "VERIFIED" && <p className="kyc-notice">KYC {kycStatusForAccount(moneyAccount).toLowerCase()}. Account services are locked until approval.</p>}
                   {action === "WITHDRAWAL" && accountAllowance && (
                     <div className="daily-limit" aria-live="polite">
                       <span>Daily withdrawal cap</span><strong>₹{accountAllowance.daily_withdrawal_limit}</strong>
@@ -1267,15 +1418,16 @@ export default function Home() {
                   )}
                   <label>Amount (₹)<input inputMode="decimal" value={amount} onChange={(event) => setAmount(event.target.value)} placeholder="0.00" required /></label>
                   <label>Remark / Note (Optional)<input value={moneyMemo} onChange={(event) => setMoneyMemo(event.target.value)} placeholder="e.g. Salary, Monthly rent, Cash deposit" /></label>
-                  <button disabled={busy}>Post {action.toLowerCase()} to PostgreSQL</button>
+                  <button disabled={busy || kycStatusForAccount(moneyAccount) !== "VERIFIED"}>Post {action.toLowerCase()}</button>
                 </form>
               </article>
 
-              <article className="panel">
+              <article className="panel" hidden={operationView !== "TRANSFER"}>
                 <h2>Transfer funds</h2>
                 <p className="muted">Atomic double-entry transfer between active accounts.</p>
                 <form className="stack" onSubmit={submitTransfer}>
                   <label>From account<input inputMode="numeric" pattern="[0-9]{10}" value={sender} onChange={(event) => { setSender(event.target.value); setAccountAllowance(null); }} onBlur={() => run(() => refreshAccountAllowance(sender))} placeholder="Sender 10-digit account" required /></label>
+                  {sender && kycStatusForAccount(sender) !== "VERIFIED" && <p className="kyc-notice">Sender KYC {kycStatusForAccount(sender).toLowerCase()}. Transfer is locked until approval.</p>}
                   {accountAllowance && (
                     <div className="daily-limit" aria-live="polite">
                       <span>Daily outgoing cap</span><strong>₹{accountAllowance.daily_withdrawal_limit}</strong>
@@ -1283,17 +1435,18 @@ export default function Home() {
                       <span>Remaining</span><strong>₹{accountAllowance.daily_withdrawal_remaining}</strong>
                     </div>
                   )}
-                  <label>To account<input inputMode="numeric" pattern="[0-9]{10}" value={receiver} onChange={(event) => setReceiver(event.target.value)} placeholder="Receiver 10-digit account" required /></label>
+                  <label>To account<input inputMode="numeric" pattern="[0-9]{10}" value={receiver} onChange={(event) => setReceiver(event.target.value)} onBlur={() => run(() => refreshAccountAllowance(receiver))} placeholder="Receiver 10-digit account" required /></label>
+                  {receiver && kycStatusForAccount(receiver) !== "VERIFIED" && <p className="kyc-notice">Receiver KYC {kycStatusForAccount(receiver).toLowerCase()}. Transfer is locked until approval.</p>}
                   <label>Amount (₹)<input inputMode="decimal" value={transferAmount} onChange={(event) => setTransferAmount(event.target.value)} placeholder="0.00" required /></label>
                   <label>Transfer remark (Optional)<input value={transferMemo} onChange={(event) => setTransferMemo(event.target.value)} placeholder="e.g. Invoice #203, Vendor payment" /></label>
-                  <button disabled={busy}>Submit secure transfer</button>
+                  <button disabled={busy || kycStatusForAccount(sender) !== "VERIFIED" || kycStatusForAccount(receiver) !== "VERIFIED"}>Submit secure transfer</button>
                 </form>
               </article>
 
               {staff.role === "ADMIN" && (
-                <article className="panel">
+                <article className="panel" hidden={operationView !== "ADMIN"}>
                   <h2>Add a branch</h2>
-                  <p className="muted">Manage branch codes directly in PostgreSQL.</p>
+                  <p className="muted">Manage branch codes for new accounts.</p>
                   <form className="stack" onSubmit={createBranch}>
                     <label>IFSC<input minLength={4} maxLength={20} pattern="[A-Za-z0-9]+" value={branchCode} onChange={(event) => setBranchCode(event.target.value.toUpperCase())} placeholder="e.g. SHIV0000003" required /></label>
                     <label>Branch name<input minLength={2} maxLength={150} value={branchName} onChange={(event) => setBranchName(event.target.value)} placeholder="Branch name and city" required /></label>
@@ -1312,13 +1465,14 @@ export default function Home() {
             </section>
           )}
 
-          {staff.role === "ADMIN" && (
+          {staff.role === "ADMIN" && operationView === "ADMIN" && (
             <section className="work-grid">
               <article className="panel">
                 <h2>Create staff account</h2>
                 <p className="muted">Assign role permissions for banking tellers or auditors.</p>
                 <form className="stack" onSubmit={createStaff}>
-                  <label>Full name<input value={newName} onChange={(event) => setNewName(event.target.value)} required /></label>
+                  <label>Full name<input value={newName} onChange={(event) => setNewName(event.target.value                    </>
+                  )} required /></label>
                   <label>Username<input minLength={3} value={newUsername} onChange={(event) => setNewUsername(event.target.value)} required /></label>
                   <label>Role<select value={newRole} onChange={(event) => setNewRole(event.target.value as "TELLER" | "AUDITOR")}><option value="TELLER">Teller</option><option value="AUDITOR">Auditor</option></select></label>
                   <label>Initial password<input type="password" minLength={12} value={newPassword} onChange={(event) => setNewPassword(event.target.value)} placeholder="At least 12 characters" required /></label>
@@ -1334,6 +1488,7 @@ export default function Home() {
                       <div>
                         <strong>{member.full_name}</strong>
                         <span>@{member.username} · {member.active ? "Active" : "Inactive"}</span>
+                        <span>{member.signed_in ? "Currently signed in" : "Signed out"} · last login {member.last_login_at ? new Date(member.last_login_at).toLocaleString() : "Never"}</span>
                       </div>
                       <div className="staff-controls">
                         <select
@@ -1348,6 +1503,7 @@ export default function Home() {
                           {member.active ? "Deactivate" : "Activate"}
                         </button>
                         <button className="text-button" disabled={busy} onClick={() => setStaffPasswordTarget(member)}>Reset password</button>
+                        {member.signed_in && <button className="text-button" disabled={busy} onClick={() => revokeStaffSession(member)}>Sign out device</button>}
                       </div>
                     </div>
                   ))}
@@ -1367,23 +1523,25 @@ export default function Home() {
                 <h2>New loan application</h2>
                 <p className="muted">Link an account, enter terms, then an admin can approve or reject the application.</p>
                 <form className="stack" onSubmit={submitLoan}>
-                  <label>Customer account number<input inputMode="numeric" pattern="[0-9]{10}" value={loanAccount} onChange={(event) => setLoanAccount(event.target.value)} required /></label>
+                  <label>Customer account number<input inputMode="numeric" pattern="[0-9]{10}" value={loanAccount} onChange={(event) => setLoanAccount(event.target.value)} onBlur={() => run(() => refreshAccountAllowance(loanAccount))} required /></label>
+                  {loanAccount && kycStatusForAccount(loanAccount) !== "VERIFIED" && <p className="kyc-notice">KYC {kycStatusForAccount(loanAccount).toLowerCase()}. Loan services are locked until approval.</p>}
                   <label>Loan product<select value={loanType} onChange={(event) => setLoanType(event.target.value)}><option value="PERSONAL">Personal</option><option value="HOME">Home</option><option value="VEHICLE">Vehicle</option><option value="EDUCATION">Education</option><option value="GOLD">Gold</option></select></label>
                   <label>Principal (₹)<input inputMode="decimal" value={loanPrincipal} onChange={(event) => setLoanPrincipal(event.target.value)} required /></label>
                   <label>Annual interest rate (%)<input type="number" min="0.01" max="36" step="0.01" value={loanRate} onChange={(event) => setLoanRate(event.target.value)} required /></label>
                   <label>Tenure (months)<input type="number" min="1" max="360" value={loanTenure} onChange={(event) => setLoanTenure(event.target.value)} required /></label>
-                  <button disabled={busy}>Submit loan application</button>
+                  <button disabled={busy || kycStatusForAccount(loanAccount) !== "VERIFIED"}>Submit loan application</button>
                 </form>
               </article>
               <article className="panel">
                 <h2>Open fixed deposit</h2>
                 <p className="muted">FD principal is transferred from the selected active account into the deposit ledger.</p>
                 <form className="stack" onSubmit={submitFixedDeposit}>
-                  <label>Funding account number<input inputMode="numeric" pattern="[0-9]{10}" value={fdAccount} onChange={(event) => setFdAccount(event.target.value)} required /></label>
+                  <label>Funding account number<input inputMode="numeric" pattern="[0-9]{10}" value={fdAccount} onChange={(event) => setFdAccount(event.target.value)} onBlur={() => run(() => refreshAccountAllowance(fdAccount))} required /></label>
+                  {fdAccount && kycStatusForAccount(fdAccount) !== "VERIFIED" && <p className="kyc-notice">KYC {kycStatusForAccount(fdAccount).toLowerCase()}. Fixed-deposit services are locked until approval.</p>}
                   <label>Principal (₹)<input inputMode="decimal" value={fdPrincipal} onChange={(event) => setFdPrincipal(event.target.value)} required /></label>
                   <label>Annual interest rate (%)<input type="number" min="0.01" max="15" step="0.01" value={fdRate} onChange={(event) => setFdRate(event.target.value)} required /></label>
                   <label>Tenure (days)<input type="number" min="7" max="3650" value={fdTenure} onChange={(event) => setFdTenure(event.target.value)} required /></label>
-                  <button disabled={busy}>Open fixed deposit</button>
+                  <button disabled={busy || kycStatusForAccount(fdAccount) !== "VERIFIED"}>Open fixed deposit</button>
                 </form>
               </article>
               {staff.role === "ADMIN" && (
@@ -1411,18 +1569,18 @@ export default function Home() {
                 <tbody>
                   {loans.map((loan) => (
                     <tr key={loan.loan_id}>
-                      <td>{loan.customer_name}</td><td>{loan.loan_type}</td><td><span className="status">{loan.status}</span></td>
+                      <td>{loan.customer_name}</td><td>{loan.loan_type}</td><td><span className="status">{loan.status}</span><br /><span className={`status kyc-${loan.kyc_status.toLowerCase()}`}>{loan.kyc_status}</span></td>
                       <td>₹{loan.principal}</td><td>₹{loan.outstanding}</td><td>₹{loan.emi}</td>
                       <td>{loan.interest_rate_annual}% · {loan.tenure_months} mo</td>
                       <td className="row-actions">
-                        <button className="text-button" onClick={() => openLoan(loan.loan_id)}>Details / repay</button>
-                        {staff.role === "ADMIN" && loan.status === "APPLIED" && (
+                        <button className="text-button" disabled={loan.kyc_status !== "VERIFIED"} onClick={() => openLoan(loan.loan_id)}>Details / repay</button>
+                        {staff.role === "ADMIN" && loan.kyc_status === "VERIFIED" && loan.status === "APPLIED" && (
                           <>
                             <button className="text-button" disabled={busy} onClick={() => runLoanAction(loan, "APPROVE")}>Approve</button>
                             <button className="text-button" disabled={busy} onClick={() => runLoanAction(loan, "REJECT")}>Reject</button>
                           </>
                         )}
-                        {staff.role === "ADMIN" && loan.status === "APPROVED" && (
+                        {staff.role === "ADMIN" && loan.kyc_status === "VERIFIED" && loan.status === "APPROVED" && (
                           <button className="text-button" disabled={busy} onClick={() => runLoanAction(loan, "DISBURSE")}>Disburse</button>
                         )}
                       </td>
@@ -1442,11 +1600,11 @@ export default function Home() {
                 <tbody>
                   {fixedDeposits.map((fd) => (
                     <tr key={fd.fd_id}>
-                      <td>{fd.customer_name}</td><td><span className="status">{fd.status}</span></td>
+                      <td>{fd.customer_name}</td><td><span className="status">{fd.status}</span><br /><span className={`status kyc-${fd.kyc_status.toLowerCase()}`}>{fd.kyc_status}</span></td>
                       <td>₹{fd.principal}</td><td>{fd.interest_rate_annual}%</td><td>{fd.tenure_days} days</td>
                       <td>{fd.maturity_date}</td><td>₹{fd.maturity_amount}</td>
                       <td className="row-actions">
-                        {staff.role === "ADMIN" && fd.status === "ACTIVE" && (
+                        {staff.role === "ADMIN" && fd.kyc_status === "VERIFIED" && fd.status === "ACTIVE" && (
                           <>
                             <button className="text-button" disabled={busy || fd.maturity_date > new Date().toISOString().slice(0, 10)} onClick={() => closeFixedDeposit(fd, false)}>Close at maturity</button>
                             <button className="text-button" disabled={busy} onClick={() => closeFixedDeposit(fd, true)}>Premature close</button>
@@ -1481,7 +1639,7 @@ export default function Home() {
                   {accounts.map((account) => (
                     <tr key={account.account_number}>
                       <td className="mono">{account.account_number}</td><td>{account.customer_name}</td><td>{account.account_type ?? "SAVINGS"}</td>
-                      <td><span className="status">{account.kyc_status ?? "PENDING"}</span></td>
+                      <td><span className={`status kyc-${(account.kyc_status ?? "PENDING").toLowerCase()}`}>{account.kyc_status ?? "PENDING"}</span></td>
                       <td><button className="text-button" onClick={() => openCustomer(account.account_number)}>Manage customer</button></td>
                     </tr>
                   ))}
@@ -1495,19 +1653,24 @@ export default function Home() {
                 <h2>{customerDetails.first_name} {customerDetails.last_name}</h2>
                 <p className="muted">Customer ID: <span className="mono">{customerDetails.id}</span> · Account {customerAccount}</p>
                 <div className="inline-form">
-                  <label>KYC status<select value={kycStatus} onChange={(event) => setKycStatus(event.target.value)} disabled={staff.role !== "ADMIN"}><option value="PENDING">Pending</option><option value="VERIFIED">Verified</option><option value="REJECTED">Rejected</option></select></label>
-                  {staff.role === "ADMIN" && <button disabled={busy} onClick={saveKycStatus}>Save KYC status</button>}
+                  <label>KYC status<select value={kycStatus} onChange={(event) => setKycStatus(event.target.value)} disabled={staff.role !== "ADMIN" || customerDetails.kyc_status === "REJECTED"}><option value="PENDING">Pending</option><option value="VERIFIED">Verified</option><option value="REJECTED">Rejected</option></select></label>
+                  {staff.role === "ADMIN" && customerDetails.kyc_status !== "REJECTED" && <button disabled={busy} onClick={saveKycStatus}>Save KYC status</button>}
+                  {customerDetails.kyc_status === "REJECTED" && <p className="kyc-notice kyc-notice-rejected">Rejected KYC is locked. No further customer or account action is available.</p>}
+                  {customerDetails.kyc_status === "PENDING" && <p className="kyc-notice">Pending KYC permits review only. Account operations unlock after approval.</p>}
                 </div>
               </article>
               <article className="panel">
                 <h2>Update customer profile</h2>
                 <form className="stack" onSubmit={saveCustomerProfile}>
+                  <fieldset disabled={busy || customerDetails.kyc_status !== "VERIFIED"}>
                   <label>Phone<input inputMode="tel" value={profilePhone} onChange={(event) => setProfilePhone(event.target.value)} required /></label>
                   <label>Email<input type="email" value={profileEmail} onChange={(event) => setProfileEmail(event.target.value)} /></label>
                   <label>Address<input value={profileAddress} onChange={(event) => setProfileAddress(event.target.value)} /></label>
                   <label>City<input value={profileCity} onChange={(event) => setProfileCity(event.target.value)} /></label>
                   <label>PIN code<input value={profilePin} onChange={(event) => setProfilePin(event.target.value)} /></label>
                   <button disabled={busy}>Save customer profile</button>
+                  </fieldset>
+                  {customerDetails.kyc_status !== "VERIFIED" && <p className="muted">Customer details are read-only until KYC is approved.</p>}
                 </form>
               </article>
             </section>
@@ -1519,14 +1682,19 @@ export default function Home() {
         <section className="panel">
           <div className="panel-heading">
             <div>
-              <h2>{auditView === "AUDIT" ? "PostgreSQL Security Audit Trail" : "Notification delivery log"}</h2>
-              <p className="muted">{auditView === "AUDIT" ? "Every staff login, money transfer, and account modification is recorded here." : "Simulated SMS/email notices recorded by the banking service."}</p>
+              <h2>{auditView === "MY_ACTIVITY" ? "My activity" : auditView === "AUDIT" ? "Staff activity & audit trail" : "Notification delivery log"}</h2>
+              <p className="muted">{auditView === "MY_ACTIVITY" ? "Your sign-ins, account operations, and changes are recorded here." : auditView === "AUDIT" ? "Review recorded activity across all staff accounts." : "Simulated SMS/email notices recorded by the banking service."}</p>
             </div>
             <div className="row-actions">
-              <button className={`pill-btn ${auditView === "AUDIT" ? "active" : ""}`} onClick={() => { setAuditView("AUDIT"); run(loadAuditLogs); }}>Audit trail</button>
-              <button className={`pill-btn ${auditView === "NOTIFICATIONS" ? "active" : ""}`} onClick={() => { setAuditView("NOTIFICATIONS"); run(loadNotifications); }}>Notifications</button>
+              <button className={`pill-btn ${auditView === "MY_ACTIVITY" ? "active" : ""}`} onClick={() => { setAuditView("MY_ACTIVITY"); setAuditOffset(0); run(() => loadActivityLogs("mine", "", 0)); }}>My activity</button>
+              {(staff.role === "ADMIN" || staff.role === "AUDITOR") && (
+                <button className={`pill-btn ${auditView === "AUDIT" ? "active" : ""}`} onClick={() => { setAuditView("AUDIT"); setAuditOffset(0); run(() => loadActivityLogs("all", "", 0)); }}>All staff</button>
+              )}
+              {(staff.role === "ADMIN" || staff.role === "AUDITOR") && (
+                <button className={`pill-btn ${auditView === "NOTIFICATIONS" ? "active" : ""}`} onClick={() => { setAuditView("NOTIFICATIONS"); run(loadNotifications); }}>Notifications</button>
+              )}
             </div>
-            {auditView === "AUDIT" && (
+            {auditView !== "NOTIFICATIONS" && (
             <form className="search-form" onSubmit={handleAuditFilter}>
               <input
                 placeholder="Filter action (e.g. login, transfer, open)…"
@@ -1538,7 +1706,7 @@ export default function Home() {
             )}
           </div>
           <div className="table-wrap">
-            {auditView === "AUDIT" ? (
+            {auditView !== "NOTIFICATIONS" ? (
             <table>
               <thead>
                 <tr>
@@ -1561,7 +1729,7 @@ export default function Home() {
                 ))}
                 {auditLogs.length === 0 && (
                   <tr>
-                    <td colSpan={5} className="empty">No audit logs recorded yet.</td>
+                    <td colSpan={5} className="empty">No activity recorded yet.</td>
                   </tr>
                 )}
               </tbody>
@@ -1576,6 +1744,29 @@ export default function Home() {
               </table>
             )}
           </div>
+          {auditView !== "NOTIFICATIONS" && auditLogs.length === 100 && (
+            <div className="audit-pagination">
+              <button className="button-secondary" disabled={busy || auditOffset === 0} onClick={() => run(async () => {
+                const nextOffset = Math.max(0, auditOffset - 100);
+                setAuditOffset(nextOffset);
+                await loadActivityLogs(
+                  auditView === "AUDIT" ? "all" : "mine",
+                  auditSearch,
+                  nextOffset,
+                );
+              })}>Previous</button>
+              <span>Showing {auditOffset + 1}–{auditOffset + auditLogs.length}</span>
+              <button className="button-secondary" disabled={busy} onClick={() => run(async () => {
+                const nextOffset = auditOffset + 100;
+                setAuditOffset(nextOffset);
+                await loadActivityLogs(
+                  auditView === "AUDIT" ? "all" : "mine",
+                  auditSearch,
+                  nextOffset,
+                );
+              })}>Next</button>
+            </div>
+          )}
         </section>
       )}
 
@@ -1584,7 +1775,7 @@ export default function Home() {
           <div className="panel-heading">
             <div>
               <h2>Ledger reconciliation</h2>
-              <p className="muted">Audit-proof double-entry balancing against PostgreSQL customer accounts.</p>
+              <p className="muted">Double-entry account and ledger balance verification.</p>
             </div>
             <button
               className="button-secondary"
@@ -1887,7 +2078,7 @@ export default function Home() {
       )}
 
       <footer>
-        Secure PostgreSQL Banking Engine · All data stored in PostgreSQL · No CSV storage
+        Secure Banking Operations · Staff actions are logged for administrative review
       </footer>
     </main>
   );

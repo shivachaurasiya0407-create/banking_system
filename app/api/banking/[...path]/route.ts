@@ -1,4 +1,5 @@
 import { NextRequest, NextResponse } from "next/server";
+import { hasValidRequestOrigin } from "../../request-origin";
 
 const API_URL = (process.env.BANKING_API_URL ?? "http://127.0.0.1:8000").replace(/\/+$/, "");
 const UUID = "[0-9a-fA-F-]{36}";
@@ -17,6 +18,7 @@ function isAllowed(path: string, method: string) {
       path === "admin/reconciliation" ||
       path === "admin/audit-logs" ||
       path === "admin/notifications" ||
+      path === "staff/audit-logs" ||
       path === "staff" ||
       path === "loans" ||
       path === "fixed-deposits" ||
@@ -30,14 +32,16 @@ function isAllowed(path: string, method: string) {
       path === "transfers" ||
       path === "loans" ||
       path === "fixed-deposits" ||
+      path === "auth/logout" ||
       path === "auth/change-password" ||
+      path === "staff" ||
       new RegExp(`^accounts/${ACCOUNT}/(?:deposits|withdrawals|status)$`).test(path) ||
       new RegExp(`^accounts/${ACCOUNT}/interest$`).test(path) ||
       new RegExp(`^transactions/${UUID}/reversals$`).test(path) ||
       new RegExp(`^staff/${UUID}/password-reset$`).test(path) ||
       new RegExp(`^loans/${UUID}/(?:action|repayments)$`).test(path) ||
       new RegExp(`^fixed-deposits/${UUID}/close$`).test(path) ||
-      path === "staff"
+      new RegExp(`^staff/${UUID}/session-revoke$`).test(path)
     );
   }
   return (
@@ -52,7 +56,7 @@ async function proxy(
   context: { params: Promise<{ path: string[] }> },
 ) {
   const method = request.method;
-  if (method !== "GET" && request.headers.get("origin") !== request.nextUrl.origin) {
+  if (method !== "GET" && !hasValidRequestOrigin(request)) {
     return NextResponse.json({ detail: "Invalid request origin." }, { status: 403 });
   }
 

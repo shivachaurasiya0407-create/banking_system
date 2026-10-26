@@ -59,7 +59,7 @@ def get_current_staff(
             settings.jwt_secret,
             algorithms=["HS256"],
             issuer=settings.jwt_issuer,
-            options={"require": ["exp", "iat", "iss", "sub", "ver"]},
+            options={"require": ["exp", "iat", "iss", "sub", "ver", "sid"]},
         )
         staff_id = uuid.UUID(claims["sub"])
     except (jwt.InvalidTokenError, KeyError, ValueError):
@@ -69,10 +69,15 @@ def get_current_staff(
             headers={"WWW-Authenticate": "Bearer"},
         ) from None
     staff = session.scalar(select(StaffUser).where(StaffUser.id == staff_id))
-    if staff is None or not staff.active or claims.get("ver") != staff.token_version:
+    if (
+        staff is None
+        or not staff.active
+        or claims.get("ver") != staff.token_version
+        or claims.get("sid") != staff.active_session_id
+    ):
         raise HTTPException(
             status_code=status.HTTP_401_UNAUTHORIZED,
-            detail="Staff account is unavailable.",
+            detail="Staff session is no longer active. Sign in again.",
         )
     session.commit()
     return staff
@@ -98,6 +103,7 @@ def create_access_token(staff, settings):
             "sub": str(staff.id),
             "role": staff.role,
             "ver": staff.token_version,
+            "sid": staff.active_session_id,
             "iat": now,
             "exp": expires,
             "iss": settings.jwt_issuer,
@@ -141,13 +147,4 @@ def authenticate_staff(session, username, password, settings):
         return None
     staff.failed_login_attempts = 0
     staff.locked_until = None
-    session.add(
-        AuditEvent(
-            actor_id=staff.id,
-            action="auth.login_succeeded",
-            entity_type="staff_user",
-            entity_id=str(staff.id),
-        )
-    )
-    session.commit()
     return staff

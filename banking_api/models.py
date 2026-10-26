@@ -42,6 +42,8 @@ class StaffUser(Base):
     password_hash: Mapped[str] = mapped_column(Text, nullable=False)
     token_version: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
     active: Mapped[bool] = mapped_column(Boolean, nullable=False, default=True)
+    active_session_id: Mapped[str | None] = mapped_column(String(36))
+    last_login_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
     failed_login_attempts: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
     locked_until: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
     created_at: Mapped[datetime] = mapped_column(

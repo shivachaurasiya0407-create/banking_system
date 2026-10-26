@@ -3,11 +3,13 @@ import io
 import logging
 import os
 import uuid
-from datetime import datetime
+from datetime import datetime, timedelta, timezone
 from decimal import Decimal
 from typing import Annotated
 
+import jwt
 from fastapi import Depends, FastAPI, Header, HTTPException, Query, Request, status
+from fastapi.security import HTTPAuthorizationCredentials
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse, StreamingResponse
 from sqlalchemy import func, or_, select
@@ -16,6 +18,7 @@ from sqlalchemy.orm import Session
 
 from banking_api.auth import (
     authenticate_staff,
+    bearer_scheme,
     create_access_token,
     get_current_staff,
     get_db,
@@ -175,9 +178,15 @@ def current_staff(actor: Annotated[StaffUser, Depends(get_current_staff)]):
 @app.post("/auth/login", response_model=TokenResponse, tags=["authentication"])
 def login(
     body: LoginRequest,
+    request: Request,
+    session_id: Annotated[str, Header(alias="X-Banking-Session")],
     session: Annotated[Session, Depends(get_db)],
     settings: Annotated[Settings, Depends(get_settings)],
 ):
+    try:
+        session_id = str(uuid.UUID(session_id))
+    except ValueError:
+        raise HTTPException(status_code=400, detail="A valid device session is required.") from None
     staff = authenticate_staff(session, body.username, body.password, settings)
     if staff is None:
         raise HTTPException(
@@ -185,12 +194,89 @@ def login(
             detail="Invalid credentials or account temporarily unavailable.",
             headers={"WWW-Authenticate": "Bearer"},
         )
+    last_login_at = staff.last_login_at
+    if last_login_at is not None and last_login_at.tzinfo is None:
+        last_login_at = last_login_at.replace(tzinfo=timezone.utc)
+    session_expired = (
+        last_login_at is not None
+        and last_login_at + timedelta(minutes=settings.access_token_minutes)
+        <= datetime.now(timezone.utc)
+    )
+    if staff.active_session_id not in (None, session_id) and not session_expired:
+        session.add(
+            AuditEvent(
+                actor_id=staff.id,
+                action="auth.login_blocked_active_session",
+                entity_type="staff_user",
+                entity_id=str(staff.id),
+                metadata_json={"user_agent": request.headers.get("user-agent", "")[:500]},
+            )
+        )
+        session.commit()
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail="This staff account is already signed in on another device. Sign out there first.",
+        )
+    staff.active_session_id = session_id
+    staff.last_login_at = datetime.now(timezone.utc)
+    session.add(
+        AuditEvent(
+            actor_id=staff.id,
+            action="auth.login_succeeded",
+            entity_type="staff_user",
+            entity_id=str(staff.id),
+            metadata_json={
+                "session_id": session_id,
+                "user_agent": request.headers.get("user-agent", "")[:500],
+            },
+        )
+    )
+    session.commit()
     token = create_access_token(staff, settings)
     return TokenResponse(
         access_token=token,
         expires_in=settings.access_token_minutes * 60,
         role=staff.role,
     )
+
+
+@app.post("/auth/logout", tags=["authentication"])
+def logout(
+    credentials: Annotated[
+        HTTPAuthorizationCredentials | None, Depends(bearer_scheme)
+    ],
+    session: Annotated[Session, Depends(get_db)],
+    settings: Annotated[Settings, Depends(get_settings)],
+):
+    if credentials is None:
+        raise HTTPException(status_code=401, detail="Authentication required.")
+    try:
+        claims = jwt.decode(
+            credentials.credentials,
+            settings.jwt_secret,
+            algorithms=["HS256"],
+            issuer=settings.jwt_issuer,
+            options={"verify_exp": False, "require": ["iss", "sub", "sid"]},
+        )
+        staff_id = uuid.UUID(claims["sub"])
+    except (jwt.InvalidTokenError, KeyError, ValueError):
+        raise HTTPException(status_code=401, detail="Invalid session.") from None
+    actor = session.scalar(
+        select(StaffUser).where(StaffUser.id == staff_id).with_for_update()
+    )
+    if actor is None or claims["sid"] != actor.active_session_id:
+        raise HTTPException(status_code=401, detail="Session is no longer active.")
+    actor.active_session_id = None
+    session.add(
+        AuditEvent(
+            actor_id=actor.id,
+            action="auth.logout",
+            entity_type="staff_user",
+            entity_id=str(actor.id),
+        )
+    )
+    session.commit()
+    return {"status": "signed out"}
 
 
 @app.post("/auth/change-password", tags=["authentication"])
@@ -217,6 +303,7 @@ def change_password(
         raise HTTPException(status_code=400, detail="Current password is incorrect.")
     target.password_hash = hash_password(body.new_password)
     target.token_version += 1
+    target.active_session_id = None
     session.add(
         AuditEvent(
             actor_id=target.id,
@@ -406,6 +493,8 @@ def list_staff(
             "role": staff.role,
             "active": staff.active,
             "created_at": staff.created_at,
+            "last_login_at": staff.last_login_at.isoformat() if staff.last_login_at else None,
+            "signed_in": staff.active_session_id is not None,
         }
         for staff in staff_members
     ]
@@ -425,6 +514,7 @@ def reset_staff_password(
         raise HTTPException(status_code=404, detail="Staff user not found.")
     target.password_hash = hash_password(body.password)
     target.token_version += 1
+    target.active_session_id = None
     target.failed_login_attempts = 0
     target.locked_until = None
     session.add(
@@ -471,6 +561,7 @@ def update_staff(
         target.active = body.active
     if target.role != previous["role"] or target.active != previous["active"]:
         target.token_version += 1
+        target.active_session_id = None
     session.add(
         AuditEvent(
             actor_id=actor.id,
@@ -491,6 +582,31 @@ def update_staff(
         "role": target.role,
         "active": target.active,
     }
+
+
+@app.post("/staff/{staff_id}/session-revoke", tags=["staff"])
+def revoke_staff_session(
+    staff_id: uuid.UUID,
+    actor: Annotated[object, Depends(require_roles("ADMIN"))],
+    session: Annotated[Session, Depends(get_db)],
+):
+    target = session.scalar(
+        select(StaffUser).where(StaffUser.id == staff_id).with_for_update()
+    )
+    if target is None:
+        raise HTTPException(status_code=404, detail="Staff user not found.")
+    target.active_session_id = None
+    target.token_version += 1
+    session.add(
+        AuditEvent(
+            actor_id=actor.id,
+            action="staff.session_revoked",
+            entity_type="staff_user",
+            entity_id=str(target.id),
+        )
+    )
+    session.commit()
+    return {"status": "session revoked"}
 
 
 # ─── Accounts ─────────────────────────────────────────────────────────────────
@@ -625,6 +741,7 @@ def account_details(
             if daily_limit_minor
             else "No limit"
         ),
+        "kyc_status": customer.kyc_status,
         "customer": customer_response,
     }
 
@@ -826,6 +943,16 @@ def update_kyc(
     if customer is None:
         raise HTTPException(status_code=404, detail="Customer not found.")
     previous_status = customer.kyc_status
+    if previous_status == "REJECTED" and body.kyc_status != "REJECTED":
+        raise HTTPException(
+            status_code=409,
+            detail="Rejected KYC is locked. No further account changes are allowed.",
+        )
+    if previous_status == "VERIFIED" and body.kyc_status == "PENDING":
+        raise HTTPException(
+            status_code=409,
+            detail="Approved KYC cannot be moved back to pending.",
+        )
     customer.kyc_status = body.kyc_status
     session.add(
         AuditEvent(
@@ -855,6 +982,11 @@ def update_customer_profile(
     )
     if customer is None:
         raise HTTPException(status_code=404, detail="Customer not found.")
+    if customer.kyc_status != "VERIFIED":
+        raise HTTPException(
+            status_code=409,
+            detail="Customer details can only be changed after KYC is approved.",
+        )
     if body.phone is not None:
         customer.phone = body.phone
     if body.email is not None:
@@ -1033,6 +1165,7 @@ def list_loans(
         {
             "loan_id": str(loan.id),
             "customer_name": f"{customer.first_name} {customer.last_name}",
+            "kyc_status": customer.kyc_status,
             "loan_type": loan.loan_type,
             "status": loan.status,
             "principal": f"{loan.principal_minor / 100:.2f}",
@@ -1070,6 +1203,7 @@ def get_loan(
     return {
         "loan_id": str(loan.id),
         "customer_name": f"{customer.first_name} {customer.last_name}" if customer else "N/A",
+        "kyc_status": customer.kyc_status if customer else "UNKNOWN",
         "loan_type": loan.loan_type,
         "status": loan.status,
         "principal": f"{loan.principal_minor / 100:.2f}",
@@ -1172,6 +1306,7 @@ def list_fds(
         {
             "fd_id": str(fd.id),
             "customer_name": f"{customer.first_name} {customer.last_name}",
+            "kyc_status": customer.kyc_status,
             "status": fd.status,
             "principal": f"{fd.principal_minor / 100:.2f}",
             "interest_rate_annual": str(fd.interest_rate_annual),
@@ -1223,18 +1358,19 @@ def reconciliation(
     return report
 
 
-@app.get("/admin/audit-logs", tags=["admin"])
-def audit_logs(
-    actor: Annotated[object, Depends(require_roles("ADMIN", "AUDITOR"))],
-    session: Annotated[Session, Depends(get_db)],
+def _read_audit_logs(
+    session: Session,
     limit: Annotated[int, Query(ge=1, le=100)] = 50,
     offset: Annotated[int, Query(ge=0)] = 0,
     action: Annotated[str | None, Query(max_length=100)] = None,
+    actor_id: uuid.UUID | None = None,
 ):
     query = (
         select(AuditEvent, StaffUser.username, StaffUser.full_name)
         .outerjoin(StaffUser, AuditEvent.actor_id == StaffUser.id)
     )
+    if actor_id is not None:
+        query = query.where(AuditEvent.actor_id == actor_id)
     if action and action.strip():
         query = query.where(AuditEvent.action.ilike(f"%{action.strip()}%"))
     query = (
@@ -1256,6 +1392,28 @@ def audit_logs(
         }
         for event, username, full_name in rows
     ]
+
+
+@app.get("/staff/audit-logs", tags=["staff"])
+def staff_audit_logs(
+    actor: Annotated[StaffUser, Depends(get_current_staff)],
+    session: Annotated[Session, Depends(get_db)],
+    limit: Annotated[int, Query(ge=1, le=100)] = 50,
+    offset: Annotated[int, Query(ge=0)] = 0,
+    action: Annotated[str | None, Query(max_length=100)] = None,
+):
+    return _read_audit_logs(session, limit, offset, action, actor.id)
+
+
+@app.get("/admin/audit-logs", tags=["admin"])
+def audit_logs(
+    actor: Annotated[object, Depends(require_roles("ADMIN", "AUDITOR"))],
+    session: Annotated[Session, Depends(get_db)],
+    limit: Annotated[int, Query(ge=1, le=100)] = 50,
+    offset: Annotated[int, Query(ge=0)] = 0,
+    action: Annotated[str | None, Query(max_length=100)] = None,
+):
+    return _read_audit_logs(session, limit, offset, action)
 
 
 @app.get("/admin/notifications", tags=["admin"])

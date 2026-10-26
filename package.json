@@ -3,8 +3,9 @@
   "version": "1.0.0",
   "private": true,
   "scripts": {
-    "dev": "next dev",
+    "dev": "node scripts/dev.mjs",
     "build": "next build",
+    "start": "next start --hostname 0.0.0.0",
     "lint": "eslint app next.config.mjs eslint.config.mjs",
     "typecheck": "tsc --noEmit"
   },

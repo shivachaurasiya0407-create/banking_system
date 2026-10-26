@@ -8,7 +8,16 @@ from sqlalchemy.pool import StaticPool
 
 from banking_api.app import app
 from banking_api.auth import get_current_staff, get_db, get_settings
-from banking_api.models import Account, Base, Branch, Customer, LedgerAccount, StaffUser
+from banking_api.models import (
+    Account,
+    AuditEvent,
+    Base,
+    Branch,
+    Customer,
+    LedgerAccount,
+    StaffUser,
+)
+from banking_api.security import hash_password
 from banking_api.settings import Settings
 
 
@@ -37,6 +46,7 @@ def dashboard_client():
         country="India",
         state="Delhi",
         identity_fingerprint="a" * 64,
+        kyc_status="VERIFIED",
     )
     second_customer = Customer(
         id=uuid.uuid4(),
@@ -47,6 +57,7 @@ def dashboard_client():
         country="India",
         state="Punjab",
         identity_fingerprint="b" * 64,
+        kyc_status="VERIFIED",
     )
     settings = Settings(
         database_url="sqlite://",
@@ -158,7 +169,7 @@ def test_current_staff_and_branch_routes(dashboard_client):
 
 
 def test_account_opening_uses_selected_database_branch(dashboard_client):
-    client, _, session = dashboard_client
+    client, actor, session = dashboard_client
 
     response = client.post(
         "/accounts",
@@ -183,6 +194,97 @@ def test_account_opening_uses_selected_database_branch(dashboard_client):
         account_number=response.json()["account_numbers"][0]
     ).one()
     assert account.ifsc == "SHIV0000002"
+    event = (
+        session.query(AuditEvent)
+        .filter_by(actor_id=actor.id, action="account.open")
+        .one()
+    )
+    assert event.metadata_json == {
+        "account_number": account.account_number,
+        "account_type": "SAVINGS",
+        "branch_ifsc": "SHIV0000002",
+        "opening_deposit_minor": 200_000,
+        "kyc_status": "PENDING",
+    }
+
+
+def test_pending_kyc_blocks_account_operations(dashboard_client):
+    client, _, session = dashboard_client
+    account = session.query(Account).filter_by(account_number="1000000001").one()
+    customer = session.get(Customer, account.customer_id)
+    customer.kyc_status = "PENDING"
+    starting_balance = account.balance_minor
+    session.commit()
+
+    response = client.post(
+        "/accounts/1000000001/deposits",
+        headers={"Idempotency-Key": "pending-kyc-deposit"},
+        json={"amount": "10.00"},
+    )
+
+    assert response.status_code == 400
+    assert "KYC is pending" in response.json()["detail"]
+    session.refresh(account)
+    assert account.balance_minor == starting_balance
+
+
+def test_rejected_kyc_is_terminal_and_profile_is_locked(dashboard_client):
+    client, _, session = dashboard_client
+    account = session.query(Account).filter_by(account_number="1000000001").one()
+    customer = session.get(Customer, account.customer_id)
+
+    rejected = client.patch(
+        f"/customers/{customer.id}/kyc",
+        json={"kyc_status": "REJECTED"},
+    )
+    attempt_reapproval = client.patch(
+        f"/customers/{customer.id}/kyc",
+        json={"kyc_status": "VERIFIED"},
+    )
+    attempt_profile_edit = client.patch(
+        f"/customers/{customer.id}/profile",
+        json={"phone": "7777777777"},
+    )
+
+    assert rejected.status_code == 200
+    assert attempt_reapproval.status_code == 409
+    assert attempt_profile_edit.status_code == 409
+    session.refresh(customer)
+    assert customer.kyc_status == "REJECTED"
+
+
+def test_staff_account_allows_only_one_active_device_session(dashboard_client):
+    client, actor, session = dashboard_client
+    actor.password_hash = hash_password("correct horse battery")
+    session.commit()
+    first_session_id = str(uuid.uuid4())
+    second_session_id = str(uuid.uuid4())
+    credentials = {"username": actor.username, "password": "correct horse battery"}
+
+    first_login = client.post(
+        "/auth/login",
+        headers={"X-Banking-Session": first_session_id},
+        json=credentials,
+    )
+    blocked_login = client.post(
+        "/auth/login",
+        headers={"X-Banking-Session": second_session_id},
+        json=credentials,
+    )
+
+    assert first_login.status_code == 200
+    assert blocked_login.status_code == 409
+    signed_out = client.post(
+        "/auth/logout",
+        headers={"Authorization": f"Bearer {first_login.json()['access_token']}"},
+    )
+    assert signed_out.status_code == 200
+    second_login = client.post(
+        "/auth/login",
+        headers={"X-Banking-Session": second_session_id},
+        json=credentials,
+    )
+    assert second_login.status_code == 200
 
 
 def test_teller_cannot_create_branches(dashboard_client):
@@ -197,7 +299,7 @@ def test_teller_cannot_create_branches(dashboard_client):
 
 
 def test_savings_daily_cap_is_shared_by_withdrawals_and_transfers(dashboard_client):
-    client, _, session = dashboard_client
+    client, actor, session = dashboard_client
     sender = session.query(Account).filter_by(account_number="1000000001").one()
     receiver = session.query(Account).filter_by(account_number="1000000002").one()
     sender.balance_minor = 60_000_000
@@ -246,6 +348,25 @@ def test_savings_daily_cap_is_shared_by_withdrawals_and_transfers(dashboard_clie
     assert limit.json()["daily_withdrawal_limit"] == "500000.00"
     assert limit.json()["daily_withdrawn_today"] == "500000.00"
     assert limit.json()["daily_withdrawal_remaining"] == "0.00"
+    transfer_audit = (
+        session.query(AuditEvent)
+        .filter_by(actor_id=actor.id, action="account.transfer")
+        .one()
+    )
+    assert transfer_audit.metadata_json == {
+        "sender": "1000000001",
+        "receiver": "1000000002",
+        "amount_minor": 20_000_000,
+        "transaction_id": transfer.json()["transaction_id"],
+        "memo": "",
+    }
+    withdrawal_audit = (
+        session.query(AuditEvent)
+        .filter_by(actor_id=actor.id, action="withdrawal")
+        .one()
+    )
+    assert withdrawal_audit.metadata_json["account_number"] == "1000000001"
+    assert withdrawal_audit.metadata_json["amount_minor"] == 30_000_000
 
 
 def test_audit_logs_endpoint(dashboard_client):
@@ -253,6 +374,51 @@ def test_audit_logs_endpoint(dashboard_client):
     response = client.get("/admin/audit-logs")
     assert response.status_code == 200
     assert isinstance(response.json(), list)
+
+
+def test_staff_can_view_only_their_activity_while_admin_can_view_all(dashboard_client):
+    client, actor, session = dashboard_client
+    other_staff = StaffUser(
+        id=uuid.uuid4(),
+        username="teller",
+        full_name="Demo Teller",
+        role="TELLER",
+        password_hash="unused",
+    )
+    session.add_all(
+        [
+            other_staff,
+            AuditEvent(
+                actor_id=actor.id,
+                action="account.deposit",
+                entity_type="account",
+                entity_id="own-account",
+            ),
+            AuditEvent(
+                actor_id=other_staff.id,
+                action="account.transfer",
+                entity_type="ledger_transaction",
+                entity_id="other-transfer",
+                metadata_json={"sender": "1000000001", "receiver": "1000000002"},
+            ),
+        ]
+    )
+    session.commit()
+
+    mine = client.get("/staff/audit-logs")
+    actor.role = "TELLER"
+    forbidden_all = client.get("/admin/audit-logs")
+    actor.role = "ADMIN"
+    all_activity = client.get("/admin/audit-logs")
+
+    assert mine.status_code == 200
+    assert [event["action"] for event in mine.json()] == ["account.deposit"]
+    assert forbidden_all.status_code == 403
+    assert all_activity.status_code == 200
+    assert {event["action"] for event in all_activity.json()} == {
+        "account.deposit",
+        "account.transfer",
+    }
 
 
 def test_statement_json_endpoint(dashboard_client):

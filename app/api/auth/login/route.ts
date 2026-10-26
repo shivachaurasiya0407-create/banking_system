@@ -1,10 +1,11 @@
 import { NextRequest, NextResponse } from "next/server";
+import { hasValidRequestOrigin } from "../../request-origin";
 
 const API_URL = (process.env.BANKING_API_URL ?? "http://127.0.0.1:8000").replace(/\/+$/, "");
 const SESSION_ID = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
 
 export async function POST(request: NextRequest) {
-  if (request.headers.get("origin") !== request.nextUrl.origin) {
+  if (!hasValidRequestOrigin(request)) {
     return NextResponse.json({ detail: "Invalid request origin." }, { status: 403 });
   }
   const sessionId = request.headers.get("x-banking-session");
@@ -22,7 +23,11 @@ export async function POST(request: NextRequest) {
   try {
     const upstream = await fetch(`${API_URL}/auth/login`, {
       method: "POST",
-      headers: { "Content-Type": "application/json" },
+      headers: {
+        "Content-Type": "application/json",
+        "X-Banking-Session": sessionId ?? "",
+        "User-Agent": request.headers.get("user-agent") ?? "",
+      },
       body: JSON.stringify(credentials),
       cache: "no-store",
     });

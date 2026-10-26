@@ -176,7 +176,19 @@ class BankingService:
                 (account.account_number,),
                 (account.balance_minor,),
             )
-            self._audit(actor_id, "account.open", "account", account.id)
+            self._audit(
+                actor_id,
+                "account.open",
+                "account",
+                account.id,
+                {
+                    "account_number": account.account_number,
+                    "account_type": account.account_type,
+                    "branch_ifsc": account.ifsc,
+                    "opening_deposit_minor": amount,
+                    "kyc_status": customer.kyc_status,
+                },
+            )
             self._notify(
                 customer.id,
                 customer.phone,
@@ -201,6 +213,8 @@ class BankingService:
         if memo:
             request["memo"] = memo.strip()
         with self._atomic():
+            account = self._get_account(account_number, lock=True)
+            self._require_verified_account(account)
             transaction, replay = self._begin_operation(
                 actor_id, idempotency_key, kind, request
             )
@@ -208,7 +222,6 @@ class BankingService:
                 return self._replayed_result(transaction)
             if memo:
                 transaction.memo = memo.strip()[:250]
-            account = self._get_account(account_number, lock=True)
             if account.status != "ACTIVE":
                 raise BankingError("Account is not active.")
             customer_ledger = self._customer_ledger(account.id)
@@ -235,7 +248,18 @@ class BankingService:
             self._store_result(
                 transaction, (account.account_number,), (account.balance_minor,)
             )
-            self._audit(actor_id, kind.lower(), "account", account.id)
+            self._audit(
+                actor_id,
+                kind.lower(),
+                "account",
+                account.id,
+                {
+                    "account_number": account.account_number,
+                    "amount_minor": amount_minor,
+                    "transaction_id": str(transaction.id),
+                    "memo": transaction.memo,
+                },
+            )
             customer = self.session.get(Customer, account.customer_id)
             if customer:
                 action_word = "credited" if kind == "DEPOSIT" else "debited"
@@ -263,14 +287,6 @@ class BankingService:
         if memo:
             request["memo"] = memo.strip()
         with self._atomic():
-            transaction, replay = self._begin_operation(
-                actor_id, idempotency_key, "TRANSFER", request
-            )
-            if replay:
-                return self._replayed_result(transaction)
-            if memo:
-                transaction.memo = memo.strip()[:250]
-
             locked_accounts = self.session.scalars(
                 select(Account)
                 .where(Account.account_number.in_([sender_number, receiver_number]))
@@ -282,6 +298,16 @@ class BankingService:
             receiver = by_number.get(receiver_number)
             if sender is None or receiver is None:
                 raise BankingError("Sender or receiver account was not found.")
+            self._require_verified_account(sender)
+            self._require_verified_account(receiver)
+            transaction, replay = self._begin_operation(
+                actor_id, idempotency_key, "TRANSFER", request
+            )
+            if replay:
+                return self._replayed_result(transaction)
+            if memo:
+                transaction.memo = memo.strip()[:250]
+
             if sender.status != "ACTIVE" or receiver.status != "ACTIVE":
                 raise BankingError("Both accounts must be active.")
             if sender.balance_minor < amount_minor:
@@ -314,7 +340,13 @@ class BankingService:
                 "account.transfer",
                 "ledger_transaction",
                 transaction.id,
-                {"sender": sender_number, "receiver": receiver_number},
+                {
+                    "sender": sender_number,
+                    "receiver": receiver_number,
+                    "amount_minor": amount_minor,
+                    "transaction_id": str(transaction.id),
+                    "memo": transaction.memo,
+                },
             )
             # Notifications
             sender_customer = self.session.get(Customer, sender.customer_id)
@@ -339,18 +371,20 @@ class BankingService:
             raise BankingError("Unsupported account status.")
         request = {"account_number": account_number, "status": new_status}
         with self._atomic():
+            account = self._get_account(account_number, lock=True)
+            self._require_verified_account(account)
             transaction, replay = self._begin_operation(
                 actor_id, idempotency_key, "ACCOUNT_STATUS", request
             )
             if replay:
                 return self._replayed_result(transaction)
-            account = self._get_account(account_number, lock=True)
             if account.status == new_status:
                 raise BankingError(f"Account is already {new_status.lower()}.")
             if account.status == "CLOSED" or (
                 new_status == "CLOSED" and account.balance_minor != 0
             ):
                 raise BankingError("Only zero-balance accounts may be closed.")
+            previous_status = account.status
             account.status = new_status
             transaction.result_id = str(account.id)
             self._post(transaction, [])
@@ -358,7 +392,16 @@ class BankingService:
                 transaction, (account.account_number,), (account.balance_minor,)
             )
             self._audit(
-                actor_id, "account.status", "account", account.id, {"status": new_status}
+                actor_id,
+                "account.status",
+                "account",
+                account.id,
+                {
+                    "account_number": account.account_number,
+                    "previous_status": previous_status,
+                    "new_status": new_status,
+                    "transaction_id": str(transaction.id),
+                },
             )
             return OperationResult(
                 transaction.id, (account.account_number,), (account.balance_minor,)
@@ -371,11 +414,6 @@ class BankingService:
             raise BankingError("A reversal reason of at most 250 characters is required.")
         request = {"original_transaction_id": str(original_id), "reason": reason}
         with self._atomic():
-            reversal, replay = self._begin_operation(
-                actor_id, idempotency_key, "REVERSAL", request
-            )
-            if replay:
-                return self._replayed_result(reversal)
             original = self.session.scalar(
                 select(LedgerTransaction)
                 .where(LedgerTransaction.id == original_id)
@@ -383,6 +421,23 @@ class BankingService:
             )
             if original is None:
                 raise BankingError("Transaction to reverse was not found.")
+            linked_ledgers = self.session.scalars(
+                select(LedgerAccount)
+                .join(LedgerEntry, LedgerEntry.ledger_account_id == LedgerAccount.id)
+                .where(
+                    LedgerEntry.transaction_id == original.id,
+                    LedgerAccount.account_id.is_not(None),
+                )
+            ).all()
+            for ledger in linked_ledgers:
+                account = self.session.get(Account, ledger.account_id)
+                if account is not None:
+                    self._require_verified_account(account)
+            reversal, replay = self._begin_operation(
+                actor_id, idempotency_key, "REVERSAL", request
+            )
+            if replay:
+                return self._replayed_result(reversal)
             if original.status != "POSTED" or original.kind in {"ACCOUNT_STATUS", "REVERSAL"}:
                 raise BankingError("Only posted money transactions can be reversed.")
             if original.actor_id == actor_id:
@@ -454,6 +509,7 @@ class BankingService:
         account = self._get_account(account_number, lock=False)
         if account.status != "ACTIVE":
             raise BankingError("Linked account must be active.")
+        self._require_verified_account(account)
         emi_minor = _calculate_emi(principal_minor, Decimal(str(interest_rate_annual)), tenure_months)
         loan = Loan(
             customer_id=account.customer_id,
@@ -486,6 +542,10 @@ class BankingService:
         )
         if loan is None:
             raise BankingError("Loan not found.")
+        linked_account = self.session.get(Account, loan.account_id)
+        if linked_account is None:
+            raise BankingError("Linked account was not found.")
+        self._require_verified_account(linked_account)
         if action == "APPROVE":
             if loan.status != "APPLIED":
                 raise BankingError("Only APPLIED loans can be approved.")
@@ -520,6 +580,7 @@ class BankingService:
                     )
                     if account is None or account.status != "ACTIVE":
                         raise BankingError("Linked account is not active.")
+                    self._require_verified_account(account)
                     account.balance_minor += loan.principal_minor
                     customer_ledger = self._customer_ledger(account.id)
                     loan_ledger = self._get_system_ledger(LOAN_RECEIVABLE_CODE)
@@ -567,6 +628,7 @@ class BankingService:
             )
             if account is None or account.status != "ACTIVE":
                 raise BankingError("Linked account is not active.")
+            self._require_verified_account(account)
             if account.balance_minor < amount_minor:
                 raise BankingError("Insufficient funds in linked account for EMI.")
             transaction, replay = self._begin_operation(
@@ -626,6 +688,8 @@ class BankingService:
         rate = Decimal(str(interest_rate_annual))
         maturity_amount = _fd_maturity_amount(principal_minor, rate, tenure_days)
         with self._atomic():
+            account = self._get_account(account_number, lock=True)
+            self._require_verified_account(account)
             transaction, replay = self._begin_operation(
                 actor_id, idempotency_key, "FD_OPEN",
                 {"account_number": account_number, "principal_minor": principal_minor,
@@ -633,7 +697,6 @@ class BankingService:
             )
             if replay:
                 return self._replayed_result(transaction)
-            account = self._get_account(account_number, lock=True)
             if account.status != "ACTIVE":
                 raise BankingError("Source account must be active.")
             if account.balance_minor < principal_minor:
@@ -689,6 +752,12 @@ class BankingService:
                 raise BankingError("Fixed deposit not found.")
             if fd.status != "ACTIVE":
                 raise BankingError("Only ACTIVE fixed deposits can be closed.")
+            account = self.session.scalar(
+                select(Account).where(Account.id == fd.account_id).with_for_update()
+            )
+            if account is None:
+                raise BankingError("Source account was not found.")
+            self._require_verified_account(account)
             today = datetime.date.today()
             if not premature and today < fd.maturity_date:
                 raise BankingError(
@@ -708,9 +777,6 @@ class BankingService:
             )
             if replay:
                 return self._replayed_result(transaction)
-            account = self.session.scalar(
-                select(Account).where(Account.id == fd.account_id).with_for_update()
-            )
             if account is None or account.status != "ACTIVE":
                 raise BankingError("Source account is not active.")
             account.balance_minor += payout
@@ -755,6 +821,7 @@ class BankingService:
             raise BankingError("period_month must be in YYYY-MM format.")
         with self._atomic():
             account = self._get_account(account_number, lock=True)
+            self._require_verified_account(account)
             if account.status != "ACTIVE":
                 raise BankingError("Account is not active.")
             if account.account_type not in {"SAVINGS", "SALARY"}:
@@ -1061,6 +1128,18 @@ class BankingService:
         if account is None:
             raise BankingError("Account not found.")
         return account
+
+    def _require_verified_account(self, account: Account) -> Customer:
+        customer = self.session.get(Customer, account.customer_id)
+        if customer is None:
+            raise BankingError("Account owner record is missing.")
+        if customer.kyc_status == "PENDING":
+            raise BankingError("Customer KYC is pending. Operations are disabled until approval.")
+        if customer.kyc_status == "REJECTED":
+            raise BankingError("Customer KYC was rejected. Account operations are disabled.")
+        if customer.kyc_status != "VERIFIED":
+            raise BankingError("Customer KYC is not approved.")
+        return customer
 
     def _customer_ledger(self, account_id):
         ledger = self.session.scalar(
