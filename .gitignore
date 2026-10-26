@@ -1,11 +1,13 @@
 .venv/
 __pycache__/
 *.py[cod]
-.env
+.env*
+!.env.example
 *.csv
 node_modules/
 .next/
 out/
+coverage/
 next-env.d.ts
 *.tsbuildinfo
 .pytest_cache/

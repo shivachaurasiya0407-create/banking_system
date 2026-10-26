@@ -14,6 +14,7 @@ const privateIpv4Hosts = Object.values(os.networkInterfaces())
   .map((entry) => entry.address);
 
 const nextConfig = {
+  output: "standalone",
   poweredByHeader: false,
   allowedDevOrigins: ["127.0.0.1", ...privateIpv4Hosts],
   async redirects() {

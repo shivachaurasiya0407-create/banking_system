@@ -45,9 +45,55 @@ If another device cannot connect, make sure it is on the same trusted Wi-Fi/LAN 
 
 To stop both services, press `Ctrl+C` in the terminal running `npm run dev`.
 
+If port `8000` is already occupied, the launcher automatically tries the next
+available port through `8099` and configures the portal proxy to use it. To
+require one specific API port, set `BANKING_API_PORT` in the current PowerShell
+session before starting; the launcher will report a clear error if that port is
+busy.
+
 Sign in with:
 - **Username**: `shiva`
 - **Initial password**: `shiva@12345678`
+
+## Docker Deployment (Educational Use Only)
+
+The repository includes a Docker Compose deployment for the portal, API, and
+PostgreSQL. It is a self-hosted starting point, not an approved production
+banking deployment. Use synthetic data only; do not expose it publicly or use
+it to hold customer data or move real funds.
+
+1. Install Docker Engine/Desktop with the Compose plugin on a trusted host.
+2. Create a local deployment environment file and fill in unique secrets:
+   ```powershell
+   Copy-Item .env.example .env
+   ```
+   Replace `POSTGRES_PASSWORD` with a long URL-safe value containing only
+   letters, digits, `_`, or `-`; it is also embedded in the API database URL.
+   Set `JWT_SECRET` and `PII_HMAC_KEY` to different random values of at least
+   32 bytes. Keep `.env` out of source control.
+3. Build and start the deployment:
+   ```powershell
+   docker compose -f docker-compose.deploy.yml up --build -d
+   ```
+   The web portal is available at `http://localhost:3000` (or `WEB_PORT` if
+   configured). The API and database have no published host ports; the portal
+   talks to the API over the private Compose network. Database migrations run
+   before the API starts, and health checks gate service startup.
+4. Put a TLS-terminating reverse proxy in front of the web portal before any
+   remote access. Do not publish the API or PostgreSQL ports. Restrict access
+   to trusted users and networks.
+5. Create the first admin with the bootstrap command inside the API container:
+   ```powershell
+   docker compose -f docker-compose.deploy.yml exec api python -m banking_api.bootstrap_admin --seed-shiva
+   ```
+   Change the initial password immediately. Back up the PostgreSQL volume
+   securely and test restoring it before relying on the deployment.
+6. Stop the stack with:
+   ```powershell
+   docker compose -f docker-compose.deploy.yml down
+   ```
+   This preserves the named database volume. `down -v` deletes the database
+   volume and its data.
 
 ---
 

@@ -1463,7 +1463,6 @@ export default function Home() {
                 </article>
               )}
             </section>
-          )}
 
           {staff.role === "ADMIN" && operationView === "ADMIN" && (
             <section className="work-grid">
@@ -1471,8 +1470,7 @@ export default function Home() {
                 <h2>Create staff account</h2>
                 <p className="muted">Assign role permissions for banking tellers or auditors.</p>
                 <form className="stack" onSubmit={createStaff}>
-                  <label>Full name<input value={newName} onChange={(event) => setNewName(event.target.value                    </>
-                  )} required /></label>
+                  <label>Full name<input value={newName} onChange={(event) => setNewName(event.target.value)} required /></label>
                   <label>Username<input minLength={3} value={newUsername} onChange={(event) => setNewUsername(event.target.value)} required /></label>
                   <label>Role<select value={newRole} onChange={(event) => setNewRole(event.target.value as "TELLER" | "AUDITOR")}><option value="TELLER">Teller</option><option value="AUDITOR">Auditor</option></select></label>
                   <label>Initial password<input type="password" minLength={12} value={newPassword} onChange={(event) => setNewPassword(event.target.value)} placeholder="At least 12 characters" required /></label>
