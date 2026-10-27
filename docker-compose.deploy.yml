@@ -2,6 +2,7 @@ services:
   postgres:
     image: postgres:17
     restart: unless-stopped
+    init: true
     environment:
       POSTGRES_DB: banking_system
       POSTGRES_USER: banking_app
@@ -19,6 +20,11 @@ services:
       context: .
       dockerfile: Dockerfile.api
     restart: unless-stopped
+    init: true
+    security_opt:
+      - no-new-privileges:true
+    cap_drop:
+      - ALL
     environment:
       DATABASE_URL: postgresql+psycopg://banking_app:${POSTGRES_PASSWORD}@postgres:5432/banking_system
       JWT_SECRET: ${JWT_SECRET:?Set JWT_SECRET in the deployment environment}
@@ -46,13 +52,28 @@ services:
       context: .
       dockerfile: Dockerfile.web
     restart: unless-stopped
+    init: true
+    security_opt:
+      - no-new-privileges:true
+    cap_drop:
+      - ALL
     environment:
       BANKING_API_URL: http://api:8000
     depends_on:
       api:
         condition: service_healthy
     ports:
-      - "${WEB_PORT:-3000}:3000"
+      - "${WEB_BIND_ADDRESS:-127.0.0.1}:${WEB_PORT:-3000}:3000"
+    healthcheck:
+      test:
+        - CMD
+        - node
+        - -e
+        - "fetch('http://127.0.0.1:3000').then((r) => process.exit(r.ok ? 0 : 1)).catch(() => process.exit(1))"
+      interval: 15s
+      timeout: 5s
+      retries: 5
+      start_period: 30s
 
 volumes:
   banking_postgres_data:

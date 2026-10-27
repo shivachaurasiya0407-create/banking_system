@@ -104,7 +104,10 @@ async function proxy(
       status: upstream.status,
       headers: responseHeaders,
     });
-    if (upstream.status === 401) {
+    if (
+      upstream.status === 401 ||
+      (path === "auth/logout" && upstream.ok)
+    ) {
       response.cookies.set(cookieName, "", {
         httpOnly: true,
         secure: process.env.NODE_ENV === "production",

@@ -22,6 +22,10 @@ IdempotencyKey = Annotated[
 ]
 
 
+def _uppercase_text(value):
+    return value.upper() if isinstance(value, str) else value
+
+
 class LoginRequest(BaseModel):
     username: Username
     password: Annotated[str, Field(min_length=1, max_length=256)]
@@ -55,7 +59,12 @@ class CustomerCreate(BaseModel):
     def validate_country(cls, value):
         if value.casefold() != "india":
             raise ValueError("This system currently supports India only.")
-        return "India"
+        return "INDIA"
+
+    @field_validator("first_name", "last_name", "address_line1", "address_city", mode="before")
+    @classmethod
+    def uppercase_profile_text(cls, value):
+        return _uppercase_text(value)
 
     @field_validator("first_name", "last_name")
     @classmethod
@@ -78,7 +87,7 @@ class CustomerCreate(BaseModel):
         state = canonical_states.get(value.casefold())
         if state is None:
             raise ValueError("Enter a supported Indian state or union territory.")
-        return state
+        return state.upper()
 
     @field_validator("email")
     @classmethod
@@ -100,6 +109,11 @@ class CustomerUpdateRequest(BaseModel):
     address_line1: Annotated[str | None, Field(default=None, max_length=250)] = None
     address_city: Annotated[str | None, Field(default=None, max_length=100)] = None
     address_pin: Annotated[str | None, Field(default=None, max_length=10)] = None
+
+    @field_validator("address_line1", "address_city", mode="before")
+    @classmethod
+    def uppercase_address_text(cls, value):
+        return _uppercase_text(value)
 
     @field_validator("phone")
     @classmethod
@@ -144,10 +158,20 @@ class BranchCreateRequest(BaseModel):
     ifsc: Annotated[str, Field(min_length=4, max_length=20, pattern=r"^[A-Z0-9]+$")]
     name: Annotated[str, Field(min_length=2, max_length=150)]
 
+    @field_validator("name", mode="before")
+    @classmethod
+    def uppercase_name(cls, value):
+        return _uppercase_text(value)
+
 
 class MoneyRequest(BaseModel):
     amount: Annotated[str, Field(min_length=1, max_length=24)]
     memo: Annotated[str, Field(default="", max_length=250)] = ""
+
+    @field_validator("memo", mode="before")
+    @classmethod
+    def uppercase_memo(cls, value):
+        return _uppercase_text(value)
 
 
 class TransferRequest(BaseModel):
@@ -155,6 +179,11 @@ class TransferRequest(BaseModel):
     receiver_account: AccountNumber
     amount: Annotated[str, Field(min_length=1, max_length=24)]
     memo: Annotated[str, Field(default="", max_length=250)] = ""
+
+    @field_validator("memo", mode="before")
+    @classmethod
+    def uppercase_memo(cls, value):
+        return _uppercase_text(value)
 
 
 class AccountStatusRequest(BaseModel):
@@ -170,7 +199,7 @@ class TransactionReversalRequest(BaseModel):
         value = value.strip()
         if len(value) < 5:
             raise ValueError("Reversal reason must contain at least five characters.")
-        return value
+        return value.upper()
 
 
 class StaffCreateRequest(BaseModel):
@@ -178,6 +207,11 @@ class StaffCreateRequest(BaseModel):
     full_name: Annotated[str, Field(min_length=1, max_length=200)]
     role: Annotated[str, Field(pattern=r"^(ADMIN|TELLER|AUDITOR)$")]
     password: Annotated[str, Field(min_length=12, max_length=256)]
+
+    @field_validator("full_name", mode="before")
+    @classmethod
+    def uppercase_full_name(cls, value):
+        return _uppercase_text(value)
 
 
 class StaffChangePasswordRequest(BaseModel):
@@ -212,6 +246,11 @@ class LoanApplicationRequest(BaseModel):
     tenure_months: Annotated[int, Field(ge=1, le=360)]
     memo: Annotated[str, Field(default="", max_length=500)] = ""
 
+    @field_validator("memo", mode="before")
+    @classmethod
+    def uppercase_memo(cls, value):
+        return _uppercase_text(value)
+
 
 class LoanActionRequest(BaseModel):
     """Approve / reject / disburse a loan."""
@@ -219,12 +258,22 @@ class LoanActionRequest(BaseModel):
     action: Annotated[str, Field(pattern=r"^(APPROVE|REJECT|DISBURSE)$")]
     memo: Annotated[str, Field(default="", max_length=500)] = ""
 
+    @field_validator("memo", mode="before")
+    @classmethod
+    def uppercase_memo(cls, value):
+        return _uppercase_text(value)
+
 
 class LoanRepaymentRequest(BaseModel):
     """Post an EMI or part-payment against a loan."""
 
     amount: Annotated[str, Field(min_length=1, max_length=24)]
     memo: Annotated[str, Field(default="", max_length=250)] = ""
+
+    @field_validator("memo", mode="before")
+    @classmethod
+    def uppercase_memo(cls, value):
+        return _uppercase_text(value)
 
 
 # ─── Fixed Deposit schemas ────────────────────────────────────────────────────

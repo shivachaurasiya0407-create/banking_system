@@ -15,6 +15,7 @@ from banking_api.models import (
     Branch,
     Customer,
     LedgerAccount,
+    LedgerTransaction,
     StaffUser,
 )
 from banking_api.security import hash_password
@@ -33,29 +34,29 @@ def dashboard_client():
     actor = StaffUser(
         id=uuid.uuid4(),
         username="admin",
-        full_name="Demo Admin",
+        full_name="DEMO ADMIN",
         role="ADMIN",
         password_hash="unused",
     )
     first_customer = Customer(
         id=uuid.uuid4(),
-        first_name="Asha",
-        last_name="Sharma",
+        first_name="ASHA",
+        last_name="SHARMA",
         phone="9999999999",
         age=30,
-        country="India",
-        state="Delhi",
+        country="INDIA",
+        state="DELHI",
         identity_fingerprint="a" * 64,
         kyc_status="VERIFIED",
     )
     second_customer = Customer(
         id=uuid.uuid4(),
-        first_name="Ravi",
-        last_name="Verma",
+        first_name="RAVI",
+        last_name="VERMA",
         phone="8888888888",
         age=35,
-        country="India",
-        state="Punjab",
+        country="INDIA",
+        state="PUNJAB",
         identity_fingerprint="b" * 64,
         kyc_status="VERIFIED",
     )
@@ -73,8 +74,8 @@ def dashboard_client():
             actor,
             first_customer,
             second_customer,
-            Branch(ifsc="SHIV0000001", name="Main Branch", next_sequence=1),
-            Branch(ifsc="SHIV0000002", name="Demo Branch", next_sequence=1),
+            Branch(ifsc="SHIV0000001", name="MAIN BRANCH", next_sequence=1),
+            Branch(ifsc="SHIV0000002", name="DEMO BRANCH", next_sequence=1),
             Account(
                 id=uuid.uuid4(),
                 customer_id=first_customer.id,
@@ -146,22 +147,40 @@ def test_account_search_matches_customer_name_and_escapes_wildcards(dashboard_cl
     assert wildcard.json()["items"] == []
 
 
+def test_cors_allows_banking_session_header_for_browser_clients(dashboard_client):
+    client, _, _ = dashboard_client
+
+    response = client.options(
+        "/auth/login",
+        headers={
+            "Origin": "http://localhost:3000",
+            "Access-Control-Request-Method": "POST",
+            "Access-Control-Request-Headers": "X-Banking-Session",
+        },
+    )
+
+    assert response.status_code == 200
+    assert "X-Banking-Session" in response.headers.get("access-control-allow-headers", "")
+
+
 def test_current_staff_and_branch_routes(dashboard_client):
     client, _, _ = dashboard_client
 
     assert client.get("/auth/me").json() == {
         "id": str(dashboard_client[1].id),
         "username": "admin",
-        "full_name": "Demo Admin",
+        "full_name": "DEMO ADMIN",
         "role": "ADMIN",
     }
     assert client.get("/branches").json() == [
-        {"ifsc": "SHIV0000002", "name": "Demo Branch"},
-        {"ifsc": "SHIV0000001", "name": "Main Branch"},
+        {"ifsc": "SHIV0000002", "name": "DEMO BRANCH"},
+        {"ifsc": "SHIV0000001", "name": "MAIN BRANCH"},
     ]
-    assert client.post(
+    created = client.post(
         "/branches", json={"ifsc": "SHIV0000003", "name": "Demo Branch 3"}
-    ).status_code == 201
+    )
+    assert created.status_code == 201
+    assert created.json()["name"] == "DEMO BRANCH 3"
     duplicate = client.post(
         "/branches", json={"ifsc": "SHIV0000003", "name": "Duplicate"}
     )
@@ -183,6 +202,9 @@ def test_account_opening_uses_selected_database_branch(dashboard_client):
                 "country": "India",
                 "state": "Delhi",
                 "identity_number": "123456789012",
+                "email": "Mira.Kapoor@Example.com",
+                "address_line1": "42 Green Road",
+                "address_city": "New Delhi",
             },
             "opening_deposit": "2000.00",
             "branch_ifsc": "SHIV0000002",
@@ -194,6 +216,14 @@ def test_account_opening_uses_selected_database_branch(dashboard_client):
         account_number=response.json()["account_numbers"][0]
     ).one()
     assert account.ifsc == "SHIV0000002"
+    customer = session.get(Customer, account.customer_id)
+    assert customer.first_name == "MIRA"
+    assert customer.last_name == "KAPOOR"
+    assert customer.country == "INDIA"
+    assert customer.state == "DELHI"
+    assert customer.email == "mira.kapoor@example.com"
+    assert customer.address_line1 == "42 GREEN ROAD"
+    assert customer.address_city == "NEW DELHI"
     event = (
         session.query(AuditEvent)
         .filter_by(actor_id=actor.id, action="account.open")
@@ -226,6 +256,35 @@ def test_pending_kyc_blocks_account_operations(dashboard_client):
     assert "KYC is pending" in response.json()["detail"]
     session.refresh(account)
     assert account.balance_minor == starting_balance
+
+
+def test_deposit_memo_is_saved_uppercase_and_search_is_case_insensitive(dashboard_client):
+    client, actor, session = dashboard_client
+
+    deposit = client.post(
+        "/accounts/1000000001/deposits",
+        headers={"Idempotency-Key": "uppercase-memo-test"},
+        json={"amount": "10.00", "memo": "counter deposit"},
+    )
+    search = client.get("/accounts", params={"q": "asha"})
+
+    assert deposit.status_code == 200
+    transaction = (
+        session.query(LedgerTransaction)
+        .filter_by(actor_id=actor.id, kind="DEPOSIT")
+        .one()
+    )
+    assert transaction.memo == "COUNTER DEPOSIT"
+    event = (
+        session.query(AuditEvent)
+        .filter_by(actor_id=actor.id, action="deposit")
+        .one()
+    )
+    assert event.metadata_json["memo"] == "COUNTER DEPOSIT"
+    assert search.status_code == 200
+    assert [item["account_number"] for item in search.json()["items"]] == [
+        "1000000001"
+    ]
 
 
 def test_rejected_kyc_is_terminal_and_profile_is_locked(dashboard_client):

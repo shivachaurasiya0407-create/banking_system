@@ -130,30 +130,120 @@ button:hover:not(:disabled) { background: var(--green-dark); }
 .sidebar {
   position: sticky;
   top: 98px;
-  padding: 16px 10px 10px;
+  padding: 15px 12px 12px;
   border: 1px solid var(--line);
-  border-radius: 10px;
-  background: #fff;
+  border-radius: 18px;
+  background: linear-gradient(160deg, #fff 20%, #f8fbf9 100%);
+  box-shadow: 0 12px 30px #173e2c0c;
 }
-.sidebar-label { margin: 0 10px 12px; color: var(--muted); font-size: .68rem; font-weight: 800; letter-spacing: .1em; }
-.menu-list { display: grid; gap: 4px; }
-.menu-item {
+.sidebar-brand {
   display: flex;
-  min-height: 42px;
+  align-items: center;
+  gap: 10px;
+  margin: 0 2px 18px;
+  padding: 2px 2px 15px;
+  border-bottom: 1px solid #e8efeb;
+}
+.sidebar-brand-icon {
+  display: grid;
+  width: 38px;
+  height: 38px;
+  flex: 0 0 auto;
+  place-items: center;
+  border-radius: 12px;
+  background: linear-gradient(145deg, #178365, #0b5b45);
+  color: #fff;
+  box-shadow: 0 5px 12px #14775c2b;
+}
+.sidebar-brand-copy { display: grid; gap: 3px; }
+.sidebar-brand-copy strong { color: var(--ink); font-size: .75rem; letter-spacing: .04em; }
+.sidebar-brand-copy small { color: var(--muted); font-size: .6rem; font-weight: 750; letter-spacing: .13em; }
+.sidebar-live {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  margin-left: auto;
+  padding: 5px 7px;
+  border: 1px solid #dcebe3;
+  border-radius: 99px;
+  background: #f3faf6;
+  color: var(--green-dark);
+  font-size: .57rem;
+  font-weight: 800;
+  letter-spacing: .04em;
+}
+.sidebar-live > span {
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  background: #24a477;
+  box-shadow: 0 0 0 3px #24a4771c;
+}
+.sidebar-label { margin: 0 10px 10px; color: #899791; font-size: .62rem; font-weight: 800; letter-spacing: .14em; }
+.menu-list { display: grid; gap: 7px; }
+.menu-item {
+  position: relative;
+  display: flex;
+  min-height: 48px;
   align-items: center;
   gap: 11px;
-  padding: 9px 10px;
-  border-radius: 7px;
+  padding: 7px 10px;
+  border: 1px solid transparent;
+  border-radius: 12px;
   background: transparent;
   color: #52635c;
   text-align: left;
-  font-size: .82rem;
+  font-size: .81rem;
   font-weight: 650;
+  transition: background .18s ease, color .18s ease, transform .18s ease, box-shadow .18s ease;
 }
-.menu-item svg { flex: 0 0 auto; }
-.menu-item:hover:not(:disabled) { background: var(--mint); color: var(--green-dark); }
-.menu-item.active { background: #e8f3ed; color: var(--green-dark); }
-.sidebar-role { display: flex; align-items: center; gap: 8px; margin: 16px 6px 2px; padding: 12px 6px 2px; border-top: 1px solid var(--line); color: var(--muted); font-size: .72rem; font-weight: 700; }
+.menu-item svg {
+  display: grid;
+  width: 32px;
+  height: 32px;
+  flex: 0 0 auto;
+  padding: 7px;
+  border-radius: 9px;
+  background: #f0f6f2;
+  color: #59756a;
+  transition: background .18s ease, color .18s ease;
+}
+.menu-item:hover:not(:disabled) { transform: translateX(2px); background: var(--mint); color: var(--green-dark); }
+.menu-item:hover:not(:disabled) svg { background: #e0f0e7; color: var(--green-dark); }
+.menu-item.active {
+  background: linear-gradient(110deg, #14775c, #20866a);
+  color: #fff;
+  box-shadow: 0 6px 15px #14775c30;
+}
+.menu-item.active:hover:not(:disabled) {
+  background: linear-gradient(110deg, var(--green-dark), #14775c);
+  color: #fff;
+}
+.menu-item.active svg { background: #ffffff24; color: #fff; }
+.sidebar-role {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  margin: 18px 2px 0;
+  padding: 11px 10px;
+  border: 1px solid #dfebe4;
+  border-radius: 12px;
+  background: linear-gradient(135deg, #f3faf6, #edf6f1);
+}
+.sidebar-role-icon {
+  display: grid;
+  width: 32px;
+  height: 32px;
+  flex: 0 0 auto;
+  place-items: center;
+  border-radius: 9px;
+  background: #fff;
+  color: var(--green);
+}
+.sidebar-role-copy { display: grid; gap: 3px; }
+.sidebar-role-copy strong { color: var(--green-dark); font-size: .65rem; letter-spacing: .05em; }
+.sidebar-role-copy small { color: var(--muted); font-size: .62rem; }
+}
 .content-stage { min-width: 0; }
 .content-stage > .page-heading { padding-top: 0; }
 
@@ -172,12 +262,21 @@ button:hover:not(:disabled) { background: var(--green-dark); }
   font-size: .75rem;
   font-weight: 600;
 }
-.pill-btn:hover:not(:disabled) { border-color: var(--green); color: var(--green-dark); }
-.pill-btn.active {
-  background: var(--mint);
+.pill-btn:hover:not(:disabled) {
   border-color: var(--green);
+  background: var(--mint);
   color: var(--green-dark);
+}
+.pill-btn.active {
+  background: var(--green);
+  border-color: var(--green);
+  color: #fff;
   font-weight: 700;
+}
+.pill-btn.active:hover:not(:disabled) {
+  background: var(--green-dark);
+  border-color: var(--green-dark);
+  color: #fff;
 }
 
 .metric-grid { display: grid; grid-template-columns: repeat(4, 1fr); gap: 15px; margin-bottom: 18px; }
@@ -198,6 +297,7 @@ button:hover:not(:disabled) { background: var(--green-dark); }
 .panel { margin: 16px 0; padding: 22px; }
 .panel-heading { display: flex; align-items: center; justify-content: space-between; gap: 18px; margin-bottom: 18px; }
 .panel-heading h2 { margin-bottom: 4px; }
+.account-kyc-group + .account-kyc-group { margin-top: 24px; padding-top: 20px; border-top: 1px solid var(--line); }
 .search-form { display: flex; width: min(440px, 52%); gap: 8px; }
 .search-form input { min-width: 0; }
 .table-wrap { width: 100%; overflow-x: auto; }
@@ -436,7 +536,7 @@ footer { padding: 24px 2px; color: var(--muted); text-align: center; font-size: 
   .page-heading, .panel-heading { align-items: flex-start; flex-direction: column; }
   .app-layout { grid-template-columns: minmax(0, 1fr); gap: 14px; margin-top: 18px; }
   .sidebar { position: sticky; top: 118px; z-index: 80; padding: 8px; box-shadow: 0 8px 18px #173e2c10; }
-  .sidebar-label, .sidebar-role { display: none; }
+  .sidebar-brand, .sidebar-label, .sidebar-role { display: none; }
   .menu-list { display: flex; gap: 4px; overflow-x: auto; }
   .menu-item { flex: 0 0 auto; min-height: 40px; padding: 8px 10px; }
   .menu-item span { white-space: nowrap; }

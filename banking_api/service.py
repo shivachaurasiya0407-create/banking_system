@@ -116,7 +116,12 @@ class BankingService:
             raise BankingError("Account type must be SAVINGS, CURRENT, or SALARY.")
         request = {
             "customer": {
-                key: customer_data.get(key)
+                key: (
+                    customer_data.get(key).upper()
+                    if key in {"first_name", "last_name", "country", "state"}
+                    and isinstance(customer_data.get(key), str)
+                    else customer_data.get(key)
+                )
                 for key in (
                     "first_name", "last_name", "phone", "age", "country", "state",
                 )
@@ -144,7 +149,11 @@ class BankingService:
             for field in ("email", "address_line1", "address_city", "address_pin"):
                 val = customer_data.get(field)
                 if val:
-                    customer_fields[field] = val
+                    customer_fields[field] = (
+                        val.upper()
+                        if field in {"address_line1", "address_city"}
+                        else val
+                    )
             customer = Customer(
                 **customer_fields,
                 identity_fingerprint=request["identity_fingerprint"],
@@ -204,6 +213,7 @@ class BankingService:
     def change_balance(self, actor_id, idempotency_key, account_number, kind, amount, memo=""):
         if kind not in {"DEPOSIT", "WITHDRAWAL"}:
             raise BankingError("Unsupported balance operation.")
+        memo = memo.strip().upper() if memo else ""
         amount_minor = amount_to_minor_units(amount)
         request = {
             "account_number": account_number,
@@ -276,6 +286,7 @@ class BankingService:
             )
 
     def transfer(self, actor_id, idempotency_key, sender_number, receiver_number, amount, memo=""):
+        memo = memo.strip().upper() if memo else ""
         amount_minor = amount_to_minor_units(amount)
         if sender_number == receiver_number:
             raise BankingError("Sender and receiver must be different accounts.")
@@ -409,7 +420,7 @@ class BankingService:
 
     def reverse_transaction(self, actor_id, idempotency_key, original_id, reason):
         original_id = uuid.UUID(str(original_id))
-        reason = str(reason).strip()
+        reason = str(reason).strip().upper()
         if not reason or len(reason) > 250:
             raise BankingError("A reversal reason of at most 250 characters is required.")
         request = {"original_transaction_id": str(original_id), "reason": reason}
@@ -503,6 +514,7 @@ class BankingService:
     def apply_loan(self, actor_id, account_number, loan_type, principal_amount,
                    interest_rate_annual, tenure_months, memo=""):
         """Create a new loan application (status=APPLIED)."""
+        memo = memo.strip().upper() if memo else ""
         principal_minor = amount_to_minor_units(principal_amount)
         if principal_minor < 100_000:  # min Rs.1000
             raise BankingError("Minimum loan amount is Rs. 1000.")
@@ -537,6 +549,7 @@ class BankingService:
 
     def action_loan(self, actor_id, idempotency_key, loan_id, action, memo=""):
         """Approve, reject, or disburse a loan."""
+        memo = memo.strip().upper() if memo else ""
         loan = self.session.scalar(
             select(Loan).where(Loan.id == loan_id).with_for_update()
         )
@@ -612,6 +625,7 @@ class BankingService:
 
     def repay_loan(self, actor_id, idempotency_key, loan_id, amount, memo=""):
         """Post an EMI/repayment against an active loan."""
+        memo = memo.strip().upper() if memo else ""
         amount_minor = amount_to_minor_units(amount)
         with self._atomic():
             loan = self.session.scalar(
@@ -660,7 +674,7 @@ class BankingService:
                 transaction,
                 [(customer_ledger, amount_minor), (loan_ledger, -amount_minor)],
             )
-            transaction.memo = memo.strip()[:250] if memo else "EMI Repayment"
+            transaction.memo = memo[:250] if memo else "EMI REPAYMENT"
             transaction.result_id = str(loan.id)
             self._store_result(transaction, (account.account_number,), (account.balance_minor,))
             repayment = LoanRepayment(
@@ -708,7 +722,7 @@ class BankingService:
                 transaction,
                 [(customer_ledger, principal_minor), (fd_ledger, -principal_minor)],
             )
-            transaction.memo = f"FD opened for {tenure_days} days at {rate}% p.a."
+            transaction.memo = f"FD OPENED FOR {tenure_days} DAYS AT {rate}% P.A."
             transaction.result_id = str(account.id)
             self._store_result(transaction, (account.account_number,), (account.balance_minor,))
             maturity_date = (
@@ -855,7 +869,7 @@ class BankingService:
                 transaction,
                 [(interest_ledger, interest_minor), (customer_ledger, -interest_minor)],
             )
-            transaction.memo = f"Interest credit for {period_month}"
+            transaction.memo = f"INTEREST CREDIT FOR {period_month}"
             transaction.result_id = str(account.id)
             self._store_result(transaction, (account.account_number,), (account.balance_minor,))
             accrual = InterestAccrual(

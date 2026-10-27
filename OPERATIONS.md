@@ -4,7 +4,7 @@ This is an educational banking operations prototype with PostgreSQL persistence,
 
 ## Admin Credentials
 Create the initial administrator in PostgreSQL:
-- **Full Name**: `Shiva Chaurasiya`
+- **Full Name**: `SHIVA CHAURASIYA`
 - **Username**: `shiva`
 - **Initial password**: `shiva@12345678`
 - **Role**: `ADMIN`
@@ -63,6 +63,8 @@ banking deployment. Use synthetic data only; do not expose it publicly or use
 it to hold customer data or move real funds.
 
 1. Install Docker Engine/Desktop with the Compose plugin on a trusted host.
+   This stack is for an educational prototype and synthetic data only. It is
+   not suitable for real banking, regulated workloads, or real customer data.
 2. Create a local deployment environment file and fill in unique secrets:
    ```powershell
    Copy-Item .env.example .env
@@ -70,25 +72,38 @@ it to hold customer data or move real funds.
    Replace `POSTGRES_PASSWORD` with a long URL-safe value containing only
    letters, digits, `_`, or `-`; it is also embedded in the API database URL.
    Set `JWT_SECRET` and `PII_HMAC_KEY` to different random values of at least
-   32 bytes. Keep `.env` out of source control.
+   32 bytes. Set `JWT_ISSUER` to a unique deployment-specific value. Keep
+   `.env` out of source control and store a protected backup of it separately
+   from the database backup.
 3. Build and start the deployment:
    ```powershell
    docker compose -f docker-compose.deploy.yml up --build -d
    ```
-   The web portal is available at `http://localhost:3000` (or `WEB_PORT` if
-   configured). The API and database have no published host ports; the portal
-   talks to the API over the private Compose network. Database migrations run
-   before the API starts, and health checks gate service startup.
+   By default the web portal is bound to `127.0.0.1:3000` (change `WEB_PORT`
+   for another local port). This keeps it private to the host for a reverse
+   proxy to reach. If the reverse proxy runs in another container, configure a
+   dedicated private Docker network rather than exposing the portal publicly.
+   `WEB_BIND_ADDRESS=0.0.0.0` is only appropriate when a firewall or trusted
+   network boundary restricts access. The API and database have no published
+   host ports; the portal talks to the API over the private Compose network.
+   Database migrations run before the API starts, and health checks gate
+   service startup.
 4. Put a TLS-terminating reverse proxy in front of the web portal before any
    remote access. Do not publish the API or PostgreSQL ports. Restrict access
    to trusted users and networks.
-5. Create the first admin with the bootstrap command inside the API container:
+5. Create the first admin with an interactively entered password inside the
+   API container:
    ```powershell
-   docker compose -f docker-compose.deploy.yml exec api python -m banking_api.bootstrap_admin --seed-shiva
+   docker compose -f docker-compose.deploy.yml exec api python -m banking_api.bootstrap_admin --seed-shiva --prompt-password
    ```
-   Change the initial password immediately. Back up the PostgreSQL volume
-   securely and test restoring it before relying on the deployment.
-6. Stop the stack with:
+   Never use the documented development password for a deployment. Protect
+   access to the Docker host and container logs.
+6. Before opening access, run the web/API health checks, verify login and
+   logout, confirm migrations are current, and test a database backup restore.
+   Keep the JWT and PII keys stable across restarts; rotating the PII key
+   invalidates identity fingerprints and requires a planned data migration.
+   Back up the PostgreSQL volume securely and test restoring it.
+7. Stop the stack with:
    ```powershell
    docker compose -f docker-compose.deploy.yml down
    ```
@@ -133,5 +148,15 @@ it to hold customer data or move real funds.
    - Search accounts by account number or customer name.
    - Instant freeze / unfreeze toggles.
 
-8. **Security Headers & Protection**:
+8. **Uppercase Display Text**:
+   - Customer and staff names, addresses, city/state/country values, branch names, and user-entered transaction or loan memos are stored in uppercase.
+   - Usernames and email addresses keep their existing lowercase normalization; passwords, hashes, account numbers, and technical identifiers are not case-converted.
+   - Migration `0007_uppercase_display_text` converts existing display text. Downgrading the migration does not restore its previous letter casing.
+
+9. **Portal Navigation**:
+   - Main workspace sections are reflected in the URL, so links can be refreshed, bookmarked, and revisited with browser Back/Forward.
+   - Examples: `/?tab=accounts`, `/?tab=activity&view=my-activity`, and `/?tab=activity&view=staff`.
+   - Staff activity and personal activity are separate navigation states.
+
+10. **Security Headers & Protection**:
    - Enforces `X-Frame-Options: DENY`, `X-Content-Type-Options: nosniff`, `X-XSS-Protection`, strict CORS origin checks, and HttpOnly SameSite session cookies.

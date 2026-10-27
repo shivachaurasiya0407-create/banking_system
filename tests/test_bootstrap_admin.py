@@ -39,7 +39,7 @@ def test_seed_creates_only_initial_admin(bootstrap_engine, monkeypatch):
     with Session(bootstrap_engine) as session:
         admin = session.scalar(select(StaffUser).where(StaffUser.username == "shiva"))
         assert admin is not None
-        assert admin.full_name == "Shiva Chaurasiya"
+        assert admin.full_name == "SHIVA CHAURASIYA"
         assert admin.role == "ADMIN"
         assert verify_password(bootstrap_admin.DEFAULT_ADMIN_PASSWORD, admin.password_hash)
         assert session.scalar(select(Customer.id)) is None
@@ -70,6 +70,19 @@ def test_reset_shiva_requires_explicit_flag(bootstrap_engine, monkeypatch):
     with Session(bootstrap_engine) as session:
         admin = session.scalar(select(StaffUser).where(StaffUser.username == "shiva"))
         assert verify_password(bootstrap_admin.DEFAULT_ADMIN_PASSWORD, admin.password_hash)
+
+
+def test_seed_can_prompt_for_a_unique_password(bootstrap_engine, monkeypatch):
+    password = "deployment-only secure password"
+    responses = iter([password, password])
+    monkeypatch.setattr(bootstrap_admin.getpass, "getpass", lambda prompt: next(responses))
+
+    run_bootstrap(monkeypatch, "--seed-shiva", "--prompt-password")
+
+    with Session(bootstrap_engine) as session:
+        admin = session.scalar(select(StaffUser).where(StaffUser.username == "shiva"))
+        assert admin is not None
+        assert verify_password(password, admin.password_hash)
 
 
 def test_initial_password_is_accepted_for_staff_password_workflows():

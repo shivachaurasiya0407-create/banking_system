@@ -141,9 +141,54 @@ type AuditLog = {
   created_at: string;
 };
 type OperationView = "ACCOUNT_OPENING" | "CASH" | "TRANSFER" | "ADMIN";
+type NavigationTab =
+  | "HOME"
+  | "DASHBOARD"
+  | "OPERATIONS"
+  | "LENDING"
+  | "CUSTOMERS"
+  | "AUDIT"
+  | "RECONCILIATION";
+type AuditView = "MY_ACTIVITY" | "AUDIT" | "NOTIFICATIONS";
 
 const STAFF_SESSIONS_KEY = "shiva_staff_sessions";
 const ACTIVE_STAFF_SESSION_KEY = "shiva_active_staff_session";
+const TAB_QUERY_VALUES: Record<NavigationTab, string> = {
+  HOME: "home",
+  DASHBOARD: "accounts",
+  OPERATIONS: "operations",
+  LENDING: "lending",
+  CUSTOMERS: "customers",
+  AUDIT: "activity",
+  RECONCILIATION: "reconciliation",
+};
+
+function readNavigationFromUrl(role?: Role): { tab: NavigationTab; auditView: AuditView } {
+  const params = new URLSearchParams(window.location.search);
+  const tabEntry = Object.entries(TAB_QUERY_VALUES).find(
+    ([, value]) => value === params.get("tab"),
+  );
+  let tab = (tabEntry?.[0] as NavigationTab | undefined) ?? "HOME";
+  const view = params.get("view");
+  let auditView: AuditView =
+    view === "staff"
+      ? "AUDIT"
+      : view === "notifications"
+        ? "NOTIFICATIONS"
+        : "MY_ACTIVITY";
+
+  if (
+    (role === "AUDITOR" && (tab === "OPERATIONS" || tab === "CUSTOMERS")) ||
+    (role === "TELLER" && tab === "RECONCILIATION")
+  ) {
+    tab = "DASHBOARD";
+  }
+  if (role === "TELLER" && tab === "AUDIT" && auditView !== "MY_ACTIVITY") {
+    auditView = "MY_ACTIVITY";
+  }
+
+  return { tab, auditView };
+}
 
 function storedStaffSessions(): StaffSession[] {
   if (typeof window === "undefined") return [];
@@ -220,9 +265,7 @@ export default function Home() {
   const [operationView, setOperationView] = useState<OperationView>("ACCOUNT_OPENING");
 
   // Navigation tab
-  const [activeTab, setActiveTab] = useState<
-    "HOME" | "DASHBOARD" | "OPERATIONS" | "LENDING" | "CUSTOMERS" | "AUDIT" | "RECONCILIATION"
-  >("HOME");
+  const [activeTab, setActiveTab] = useState<NavigationTab>("HOME");
   const [loans, setLoans] = useState<Loan[]>([]);
   const [fixedDeposits, setFixedDeposits] = useState<FixedDeposit[]>([]);
   const [customerDetails, setCustomerDetails] = useState<CustomerDetails | null>(null);
@@ -309,9 +352,7 @@ export default function Home() {
   const [auditSearch, setAuditSearch] = useState("");
   const [auditOffset, setAuditOffset] = useState(0);
   const [notifications, setNotifications] = useState<NotificationLog[]>([]);
-  const [auditView, setAuditView] = useState<
-    "MY_ACTIVITY" | "AUDIT" | "NOTIFICATIONS"
-  >("MY_ACTIVITY");
+  const [auditView, setAuditView] = useState<AuditView>("MY_ACTIVITY");
 
   const loadDashboard = useCallback(async () => {
     const [nextSummary, nextAccounts, nextBranches, nextStates] = await Promise.all([
@@ -359,6 +400,21 @@ export default function Home() {
     setNotifications(await api<NotificationLog[]>("admin/notifications?limit=50&offset=0"));
   }, []);
 
+  function navigateToTab(tab: NavigationTab, view: AuditView = "MY_ACTIVITY") {
+    const params = new URLSearchParams();
+    if (tab !== "HOME") params.set("tab", TAB_QUERY_VALUES[tab]);
+    if (tab === "AUDIT") {
+      params.set(
+        "view",
+        view === "MY_ACTIVITY" ? "my-activity" : view === "AUDIT" ? "staff" : "notifications",
+      );
+    }
+    const query = params.toString();
+    window.history.pushState(null, "", query ? `/?${query}` : "/");
+    setActiveTab(tab);
+    if (tab === "AUDIT") setAuditView(view);
+  }
+
   async function loadStaffWorkspace(currentStaff: Staff) {
     await Promise.all([loadDashboard(), loadProducts()]);
     if (currentStaff.role === "ADMIN") await loadStaff();
@@ -386,8 +442,34 @@ export default function Home() {
   }, []);
 
   useEffect(() => {
+    const syncNavigationFromUrl = () => {
+      const { tab, auditView: view } = readNavigationFromUrl(staff?.role);
+      setActiveTab(tab);
+      setAuditView(view);
+      if (!staff) return;
+      if (tab === "AUDIT") {
+        setAuditOffset(0);
+        if (view === "MY_ACTIVITY") {
+          void run(() => loadActivityLogs("mine", "", 0));
+        } else if (view === "AUDIT") {
+          void run(() => loadActivityLogs("all", "", 0));
+        } else {
+          void run(loadNotifications);
+        }
+      } else if (tab === "LENDING") {
+        void run(loadProducts);
+      }
+    };
+    window.addEventListener("popstate", syncNavigationFromUrl);
+    return () => window.removeEventListener("popstate", syncNavigationFromUrl);
+  }, [staff, loadActivityLogs, loadNotifications, loadProducts]);
+
+  useEffect(() => {
     api<Staff>("auth/me")
       .then(async (currentStaff) => {
+        const { tab, auditView: view } = readNavigationFromUrl(currentStaff.role);
+        setActiveTab(tab);
+        setAuditView(view);
         let selectedSession = activeStaffSessionId();
         if (!selectedSession) {
           selectedSession = "legacy";
@@ -402,6 +484,11 @@ export default function Home() {
         setStaff(currentStaff);
         try {
           await loadStaffWorkspace(currentStaff);
+          if (tab === "AUDIT") {
+            if (view === "MY_ACTIVITY") await loadActivityLogs("mine");
+            else if (view === "AUDIT") await loadActivityLogs("all");
+            else await loadNotifications();
+          }
         } catch (cause) {
           setError(cause instanceof Error ? cause.message : "Could not load dashboard.");
         }
@@ -412,7 +499,7 @@ export default function Home() {
         }
         setStaff(null);
       });
-  }, [loadDashboard, loadProducts, loadStaff, loadActivityLogs]);
+  }, [loadDashboard, loadProducts, loadStaff, loadActivityLogs, loadNotifications]);
 
   async function run(actionToRun: () => Promise<void>) {
     setBusy(true);
@@ -476,7 +563,7 @@ export default function Home() {
         const currentStaff = await api<Staff>("auth/me");
         setActiveSessionId(sessionId);
         setStaff(currentStaff);
-        setActiveTab("DASHBOARD");
+        navigateToTab("DASHBOARD");
         setSelectedAccount("");
         await loadStaffWorkspace(currentStaff);
         setNotice(`Switched to ${currentStaff.full_name}.`);
@@ -958,14 +1045,9 @@ export default function Home() {
   async function logout() {
     await run(async () => {
       const sessionId = activeSessionId;
-      const response = await fetch("/api/auth/logout", {
+      await api("auth/logout", {
         method: "POST",
-        headers: sessionId && sessionId !== "legacy" ? { "X-Banking-Session": sessionId } : {},
       });
-      if (!response.ok) {
-        const body = (await response.json().catch(() => null)) as { detail?: string } | null;
-        throw new Error(body?.detail ?? "Could not sign out.");
-      }
       const remainingSessions = staffSessions.filter((session) => session.id !== sessionId);
       setStoredStaffSessions(remainingSessions);
       setStaffSessions(remainingSessions);
@@ -993,6 +1075,108 @@ export default function Home() {
     if (statusFilter === "ALL") return true;
     return acc.status === statusFilter;
   });
+  const verifiedAccounts = filteredAccounts.filter(
+    (account) => account.kyc_status === "VERIFIED",
+  );
+  const unverifiedAccounts = filteredAccounts.filter(
+    (account) => account.kyc_status !== "VERIFIED",
+  );
+  const renderAccountTable = (
+    accountList: Account[],
+    emptyMessage: string,
+    role: Role,
+  ) => (
+    <div className="table-wrap">
+      <table>
+        <thead>
+          <tr>
+            <th>Account</th>
+            <th>Customer</th>
+            <th>IFSC</th>
+            <th>Status</th>
+            <th>KYC</th>
+            <th>Balance</th>
+            <th>Actions</th>
+          </tr>
+        </thead>
+        <tbody>
+          {accountList.map((account) => (
+            <tr key={account.account_number}>
+              <td className="mono">{account.account_number}</td>
+              <td>{account.customer_name}</td>
+              <td className="mono">{account.ifsc}</td>
+              <td>
+                <span className={`status status-${account.status.toLowerCase()}`}>
+                  {account.status}
+                </span>
+              </td>
+              <td>
+                <span className={`status kyc-${(account.kyc_status ?? "PENDING").toLowerCase()}`}>
+                  {account.kyc_status ?? "PENDING"}
+                </span>
+              </td>
+              <td><strong>₹{account.balance}</strong></td>
+              <td className="row-actions">
+                <button
+                  className="text-button"
+                  disabled={account.kyc_status !== "VERIFIED"}
+                  onClick={() => selectAccount(account.account_number)}
+                >
+                  Activity
+                </button>
+                <button
+                  className="text-button"
+                  disabled={account.kyc_status !== "VERIFIED"}
+                  onClick={() => openStatementModal(account.account_number)}
+                >
+                  Statement
+                </button>
+                {role !== "AUDITOR" && (
+                  <button
+                    className="text-button"
+                    onClick={() => {
+                      navigateToTab("CUSTOMERS");
+                      openCustomer(account.account_number);
+                    }}
+                  >
+                    Customer
+                  </button>
+                )}
+                {role === "ADMIN" && account.status !== "CLOSED" && (
+                  <>
+                    <button
+                      className="text-button"
+                      disabled={account.kyc_status !== "VERIFIED"}
+                      onClick={() =>
+                        changeStatus(
+                          account.account_number,
+                          account.status === "FROZEN" ? "ACTIVE" : "FROZEN"
+                        )
+                      }
+                    >
+                      {account.status === "FROZEN" ? "Unfreeze" : "Freeze"}
+                    </button>
+                    <button
+                      className="text-button"
+                      disabled={account.kyc_status !== "VERIFIED"}
+                      onClick={() => closeAccount(account)}
+                    >
+                      Close
+                    </button>
+                  </>
+                )}
+              </td>
+            </tr>
+          ))}
+          {accountList.length === 0 && (
+            <tr>
+              <td colSpan={7} className="empty">{emptyMessage}</td>
+            </tr>
+          )}
+        </tbody>
+      </table>
+    </div>
+  );
 
   if (!staff) {
     return (
@@ -1074,24 +1258,38 @@ export default function Home() {
 
       <div className="app-layout">
         <aside className="sidebar" aria-label="Main navigation">
+          <div className="sidebar-brand">
+            <span className="sidebar-brand-icon"><Landmark size={17} /></span>
+            <span className="sidebar-brand-copy">
+              <strong>SHIVA BANK</strong>
+              <small>STAFF PORTAL</small>
+            </span>
+            <span className="sidebar-live"><span /> LIVE</span>
+          </div>
           <p className="sidebar-label">WORKSPACE</p>
           <nav className="menu-list">
-            <button className={`menu-item ${activeTab === "HOME" ? "active" : ""}`} aria-current={activeTab === "HOME" ? "page" : undefined} onClick={() => setActiveTab("HOME")}><LayoutDashboard size={18} /><span>Home</span></button>
-            <button className={`menu-item ${activeTab === "DASHBOARD" ? "active" : ""}`} aria-current={activeTab === "DASHBOARD" ? "page" : undefined} onClick={() => setActiveTab("DASHBOARD")}><UsersRound size={18} /><span>Accounts</span></button>
-            {staff.role !== "AUDITOR" && <button className={`menu-item ${activeTab === "OPERATIONS" ? "active" : ""}`} aria-current={activeTab === "OPERATIONS" ? "page" : undefined} onClick={() => setActiveTab("OPERATIONS")}><ChartNoAxesColumn size={18} /><span>Operations</span></button>}
-            <button className={`menu-item ${activeTab === "LENDING" ? "active" : ""}`} aria-current={activeTab === "LENDING" ? "page" : undefined} onClick={() => { setActiveTab("LENDING"); run(loadProducts); }}><Landmark size={18} /><span>Loans & deposits</span></button>
-            {staff.role !== "AUDITOR" && <button className={`menu-item ${activeTab === "CUSTOMERS" ? "active" : ""}`} aria-current={activeTab === "CUSTOMERS" ? "page" : undefined} onClick={() => setActiveTab("CUSTOMERS")}><UsersRound size={18} /><span>Customer services</span></button>}
-            <button className={`menu-item ${activeTab === "AUDIT" ? "active" : ""}`} aria-current={activeTab === "AUDIT" ? "page" : undefined} onClick={() => { setActiveTab("AUDIT"); setAuditView("MY_ACTIVITY"); run(() => loadActivityLogs("mine")); }}><ShieldCheck size={18} /><span>My activity</span></button>
-            {(staff.role === "ADMIN" || staff.role === "AUDITOR") && <button className={`menu-item ${activeTab === "AUDIT" && auditView === "AUDIT" ? "active" : ""}`} onClick={() => { setActiveTab("AUDIT"); setAuditView("AUDIT"); run(() => loadActivityLogs("all")); }}><UsersRound size={18} /><span>Staff audit</span></button>}
-            {(staff.role === "ADMIN" || staff.role === "AUDITOR") && <button className={`menu-item ${activeTab === "RECONCILIATION" ? "active" : ""}`} aria-current={activeTab === "RECONCILIATION" ? "page" : undefined} onClick={() => setActiveTab("RECONCILIATION")}><Scale size={18} /><span>Reconciliation</span></button>}
+            <button className={`menu-item ${activeTab === "HOME" ? "active" : ""}`} aria-current={activeTab === "HOME" ? "page" : undefined} onClick={() => navigateToTab("HOME")}><LayoutDashboard size={18} /><span>Home</span></button>
+            <button className={`menu-item ${activeTab === "DASHBOARD" ? "active" : ""}`} aria-current={activeTab === "DASHBOARD" ? "page" : undefined} onClick={() => navigateToTab("DASHBOARD")}><UsersRound size={18} /><span>Accounts</span></button>
+            {staff.role !== "AUDITOR" && <button className={`menu-item ${activeTab === "OPERATIONS" ? "active" : ""}`} aria-current={activeTab === "OPERATIONS" ? "page" : undefined} onClick={() => navigateToTab("OPERATIONS")}><ChartNoAxesColumn size={18} /><span>Operations</span></button>}
+            <button className={`menu-item ${activeTab === "LENDING" ? "active" : ""}`} aria-current={activeTab === "LENDING" ? "page" : undefined} onClick={() => { navigateToTab("LENDING"); run(loadProducts); }}><Landmark size={18} /><span>Loans & deposits</span></button>
+            {staff.role !== "AUDITOR" && <button className={`menu-item ${activeTab === "CUSTOMERS" ? "active" : ""}`} aria-current={activeTab === "CUSTOMERS" ? "page" : undefined} onClick={() => navigateToTab("CUSTOMERS")}><UsersRound size={18} /><span>Customer services</span></button>}
+            <button className={`menu-item ${activeTab === "AUDIT" && auditView === "MY_ACTIVITY" ? "active" : ""}`} aria-current={activeTab === "AUDIT" && auditView === "MY_ACTIVITY" ? "page" : undefined} onClick={() => { navigateToTab("AUDIT", "MY_ACTIVITY"); run(() => loadActivityLogs("mine")); }}><ShieldCheck size={18} /><span>My activity</span></button>
+            {(staff.role === "ADMIN" || staff.role === "AUDITOR") && <button className={`menu-item ${activeTab === "AUDIT" && auditView === "AUDIT" ? "active" : ""}`} aria-current={activeTab === "AUDIT" && auditView === "AUDIT" ? "page" : undefined} onClick={() => { navigateToTab("AUDIT", "AUDIT"); run(() => loadActivityLogs("all")); }}><UsersRound size={18} /><span>Staff audit</span></button>}
+            {(staff.role === "ADMIN" || staff.role === "AUDITOR") && <button className={`menu-item ${activeTab === "RECONCILIATION" ? "active" : ""}`} aria-current={activeTab === "RECONCILIATION" ? "page" : undefined} onClick={() => navigateToTab("RECONCILIATION")}><Scale size={18} /><span>Reconciliation</span></button>}
           </nav>
-          <div className="sidebar-role"><ChartNoAxesColumn size={16} /><span>{staff.role} access</span></div>
+          <div className="sidebar-role">
+            <span className="sidebar-role-icon"><ShieldCheck size={17} /></span>
+            <span className="sidebar-role-copy">
+              <strong>{staff.role} ACCESS</strong>
+              <small>Secure staff workspace</small>
+            </span>
+          </div>
         </aside>
         <div className="content-stage">
       <section className="page-heading">
         <div>
           <p className="eyebrow">BANKING OPERATIONS</p>
-          <h1>{activeTab === "HOME" ? `Welcome, ${staff.full_name}` : activeTab === "DASHBOARD" ? "Accounts overview" : activeTab === "OPERATIONS" ? "Banking operations" : activeTab === "LENDING" ? "Loans & deposits" : activeTab === "CUSTOMERS" ? "Customer services" : activeTab === "AUDIT" ? "Audit & notifications" : "Reconciliation"}</h1>
+          <h1>{activeTab === "HOME" ? `Welcome, ${staff.full_name}` : activeTab === "DASHBOARD" ? "Accounts overview" : activeTab === "OPERATIONS" ? "Banking operations" : activeTab === "LENDING" ? "Loans & deposits" : activeTab === "CUSTOMERS" ? "Customer services" : activeTab === "AUDIT" ? auditView === "MY_ACTIVITY" ? "My activity" : auditView === "AUDIT" ? "Staff activity" : "Notifications" : "Reconciliation"}</h1>
           <p className="muted">{activeTab === "HOME" ? "Choose a service to get started." : "Secure staff workspace · actions are recorded for review."}</p>
         </div>
         <button className="button-secondary" onClick={() => run(loadDashboard)} disabled={busy}>
@@ -1110,14 +1308,14 @@ export default function Home() {
             <p className="muted">Choose a task. Customer functions remain locked until KYC is approved.</p>
           </div>
           <div className="service-grid">
-            <button className="service-card" onClick={() => setActiveTab("DASHBOARD")}>
+            <button className="service-card" onClick={() => navigateToTab("DASHBOARD")}>
               <span className="service-icon"><UsersRound size={21} /></span>
               <strong>Find an account</strong>
               <span>Search accounts, review status and open statements.</span>
               <span className="service-link">Open accounts <span aria-hidden="true">→</span></span>
             </button>
             {staff.role !== "AUDITOR" && (
-              <button className="service-card" onClick={() => setActiveTab("OPERATIONS")}>
+              <button className="service-card" onClick={() => navigateToTab("OPERATIONS")}>
                 <span className="service-icon"><ChartNoAxesColumn size={21} /></span>
                 <strong>Open account or transact</strong>
                 <span>Create a customer account, take deposits or manage transfers.</span>
@@ -1125,20 +1323,20 @@ export default function Home() {
               </button>
             )}
             {staff.role !== "AUDITOR" && (
-              <button className="service-card" onClick={() => setActiveTab("CUSTOMERS")}>
+              <button className="service-card" onClick={() => navigateToTab("CUSTOMERS")}>
                 <span className="service-icon"><ShieldCheck size={21} /></span>
                 <strong>Review customer KYC</strong>
                 <span>Check customer information and manage verification status.</span>
                 <span className="service-link">Review KYC <span aria-hidden="true">→</span></span>
               </button>
             )}
-            <button className="service-card" onClick={() => { setActiveTab("LENDING"); run(loadProducts); }}>
+            <button className="service-card" onClick={() => { navigateToTab("LENDING"); run(loadProducts); }}>
               <span className="service-icon"><Landmark size={21} /></span>
               <strong>Loans & fixed deposits</strong>
               <span>Review lending requests and deposit products.</span>
               <span className="service-link">Open products <span aria-hidden="true">→</span></span>
             </button>
-            <button className="service-card" onClick={() => { setActiveTab("AUDIT"); setAuditView("MY_ACTIVITY"); run(() => loadActivityLogs("mine")); }}>
+            <button className="service-card" onClick={() => { navigateToTab("AUDIT", "MY_ACTIVITY"); run(() => loadActivityLogs("mine")); }}>
                 <span className="service-icon"><Scale size={21} /></span>
                 <strong>My activity</strong>
                 <span>Review your own sign-ins, account operations and changes.</span>
@@ -1210,88 +1408,26 @@ export default function Home() {
                 <button className="button-secondary" disabled={busy}>Search</button>
               </form>
             </div>
-            <div className="table-wrap">
-              <table>
-                <thead>
-                  <tr>
-                    <th>Account</th>
-                    <th>Customer</th>
-                    <th>IFSC</th>
-                    <th>Status</th>
-                    <th>KYC</th>
-                    <th>Balance</th>
-                    <th>Actions</th>
-                  </tr>
-                </thead>
-                <tbody>
-                  {filteredAccounts.map((account) => (
-                    <tr key={account.account_number}>
-                      <td className="mono">{account.account_number}</td>
-                      <td>{account.customer_name}</td>
-                      <td className="mono">{account.ifsc}</td>
-                      <td>
-                        <span className={`status status-${account.status.toLowerCase()}`}>
-                          {account.status}
-                        </span>
-                      </td>
-                      <td><span className={`status kyc-${(account.kyc_status ?? "PENDING").toLowerCase()}`}>{account.kyc_status ?? "PENDING"}</span></td>
-                      <td><strong>₹{account.balance}</strong></td>
-                      <td className="row-actions">
-                        <button
-                          className="text-button"
-                          disabled={account.kyc_status !== "VERIFIED"}
-                          onClick={() => selectAccount(account.account_number)}
-                        >
-                          Activity
-                        </button>
-                        <button
-                          className="text-button"
-                          disabled={account.kyc_status !== "VERIFIED"}
-                          onClick={() => openStatementModal(account.account_number)}
-                        >
-                          Statement
-                        </button>
-                        {staff.role !== "AUDITOR" && (
-                          <button
-                            className="text-button"
-                            onClick={() => {
-                              setActiveTab("CUSTOMERS");
-                              openCustomer(account.account_number);
-                            }}
-                          >
-                            Customer
-                          </button>
-                        )}
-                        {staff.role === "ADMIN" && account.status !== "CLOSED" && (
-                          <>
-                            <button
-                              className="text-button"
-                              disabled={account.kyc_status !== "VERIFIED"}
-                              onClick={() =>
-                                changeStatus(
-                                  account.account_number,
-                                  account.status === "FROZEN" ? "ACTIVE" : "FROZEN"
-                                )
-                              }
-                            >
-                              {account.status === "FROZEN" ? "Unfreeze" : "Freeze"}
-                            </button>
-                            <button className="text-button" disabled={account.kyc_status !== "VERIFIED"} onClick={() => closeAccount(account)}>
-                              Close
-                            </button>
-                          </>
-                        )}
-                      </td>
-                    </tr>
-                  ))}
-                  {filteredAccounts.length === 0 && (
-                    <tr>
-                      <td colSpan={7} className="empty">No accounts match the current filter.</td>
-                    </tr>
-                  )}
-                </tbody>
-              </table>
-            </div>
+            <section className="account-kyc-group">
+              <div className="panel-heading">
+                <div>
+                  <h2>Verified KYC accounts</h2>
+                  <p className="muted">Accounts with approved customer verification.</p>
+                </div>
+                <span className="status status-active">{verifiedAccounts.length} accounts</span>
+              </div>
+              {renderAccountTable(verifiedAccounts, "No verified accounts match the current filters.", staff.role)}
+            </section>
+            <section className="account-kyc-group">
+              <div className="panel-heading">
+                <div>
+                  <h2>KYC not verified</h2>
+                  <p className="muted">Pending and rejected customer verifications.</p>
+                </div>
+                <span className="status kyc-pending">{unverifiedAccounts.length} accounts</span>
+              </div>
+              {renderAccountTable(unverifiedAccounts, "No unverified accounts match the current filters.", staff.role)}
+            </section>
           </section>
 
           {selectedAccount && (
@@ -1512,6 +1648,8 @@ export default function Home() {
           )}
         </>
       )}
+        </>
+      )}
 
       {activeTab === "LENDING" && (
         <>
@@ -1684,12 +1822,12 @@ export default function Home() {
               <p className="muted">{auditView === "MY_ACTIVITY" ? "Your sign-ins, account operations, and changes are recorded here." : auditView === "AUDIT" ? "Review recorded activity across all staff accounts." : "Simulated SMS/email notices recorded by the banking service."}</p>
             </div>
             <div className="row-actions">
-              <button className={`pill-btn ${auditView === "MY_ACTIVITY" ? "active" : ""}`} onClick={() => { setAuditView("MY_ACTIVITY"); setAuditOffset(0); run(() => loadActivityLogs("mine", "", 0)); }}>My activity</button>
+              <button className={`pill-btn ${auditView === "MY_ACTIVITY" ? "active" : ""}`} onClick={() => { navigateToTab("AUDIT", "MY_ACTIVITY"); setAuditOffset(0); run(() => loadActivityLogs("mine", "", 0)); }}>My activity</button>
               {(staff.role === "ADMIN" || staff.role === "AUDITOR") && (
-                <button className={`pill-btn ${auditView === "AUDIT" ? "active" : ""}`} onClick={() => { setAuditView("AUDIT"); setAuditOffset(0); run(() => loadActivityLogs("all", "", 0)); }}>All staff</button>
+                <button className={`pill-btn ${auditView === "AUDIT" ? "active" : ""}`} onClick={() => { navigateToTab("AUDIT", "AUDIT"); setAuditOffset(0); run(() => loadActivityLogs("all", "", 0)); }}>All staff</button>
               )}
               {(staff.role === "ADMIN" || staff.role === "AUDITOR") && (
-                <button className={`pill-btn ${auditView === "NOTIFICATIONS" ? "active" : ""}`} onClick={() => { setAuditView("NOTIFICATIONS"); run(loadNotifications); }}>Notifications</button>
+                <button className={`pill-btn ${auditView === "NOTIFICATIONS" ? "active" : ""}`} onClick={() => { navigateToTab("AUDIT", "NOTIFICATIONS"); run(loadNotifications); }}>Notifications</button>
               )}
             </div>
             {auditView !== "NOTIFICATIONS" && (

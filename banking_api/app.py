@@ -80,8 +80,13 @@ app.add_middleware(
         if origin.strip()
     ],
     allow_credentials=False,
-    allow_methods=["GET", "POST", "PATCH"],
-    allow_headers=["Authorization", "Content-Type", "Idempotency-Key"],
+    allow_methods=["GET", "POST", "PUT", "PATCH", "DELETE", "OPTIONS"],
+    allow_headers=[
+        "Authorization",
+        "Content-Type",
+        "Idempotency-Key",
+        "X-Banking-Session",
+    ],
     expose_headers=["Content-Disposition", "X-Request-ID"],
 )
 
@@ -648,8 +653,8 @@ def search_accounts(
         statement = statement.where(
             or_(
                 Account.account_number.startswith(search, autoescape=True),
-                Customer.first_name.startswith(search, autoescape=True),
-                Customer.last_name.startswith(search, autoescape=True),
+                Customer.first_name.startswith(search.upper(), autoescape=True),
+                Customer.last_name.startswith(search.upper(), autoescape=True),
             )
         )
     if status_filter and status_filter in {"ACTIVE", "FROZEN", "CLOSED"}:

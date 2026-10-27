@@ -18,6 +18,15 @@ def validate_password(password):
         raise SystemExit("Password must be between 12 and 256 characters.")
 
 
+def prompt_for_password():
+    password = getpass.getpass("Administrator password (12+ characters): ")
+    confirmation = getpass.getpass("Confirm administrator password: ")
+    if password != confirmation:
+        raise SystemExit("Passwords did not match.")
+    validate_password(password)
+    return password
+
+
 def main():
     parser = argparse.ArgumentParser(description="Bootstrap Administrator for Banking System")
     admin_action = parser.add_mutually_exclusive_group()
@@ -30,7 +39,16 @@ def main():
     parser.add_argument("--username", help="Administrator username")
     parser.add_argument("--full-name", help="Administrator full name")
     parser.add_argument("--password", help="Administrator password")
+    parser.add_argument(
+        "--prompt-password",
+        action="store_true",
+        help="Prompt securely for the administrator password",
+    )
     args = parser.parse_args()
+    if args.prompt_password and not (args.seed_shiva or args.reset_shiva):
+        parser.error("--prompt-password requires --seed-shiva or --reset-shiva.")
+    if args.prompt_password and args.password:
+        parser.error("Use either --password or --prompt-password, not both.")
 
     settings = Settings.from_environment()
     engine = configure_database(settings)
@@ -38,7 +56,7 @@ def main():
     with Session(engine) as session:
         if args.seed_shiva or args.reset_shiva:
             username = "shiva"
-            full_name = "Shiva Chaurasiya"
+            full_name = "SHIVA CHAURASIYA"
             existing = session.scalar(
                 select(StaffUser).where(StaffUser.username == username)
             )
@@ -48,7 +66,11 @@ def main():
             if args.reset_shiva and existing is None:
                 raise SystemExit("Administrator 'shiva' does not exist; run --seed-shiva first.")
 
-            password = args.password or DEFAULT_ADMIN_PASSWORD
+            password = (
+                prompt_for_password()
+                if args.prompt_password
+                else args.password or DEFAULT_ADMIN_PASSWORD
+            )
             validate_password(password)
             if existing:
                 existing.full_name = full_name
@@ -80,7 +102,7 @@ def main():
 
         if args.username and args.full_name and args.password:
             username = args.username.strip().casefold()
-            full_name = args.full_name.strip()
+            full_name = args.full_name.strip().upper()
             password = args.password
         else:
             first_user = session.scalar(select(StaffUser.id).limit(1))
@@ -93,7 +115,7 @@ def main():
                 )
                 if choice not in ("y", "yes"):
                     raise SystemExit("Cancelled.")
-            full_name = input("Administrator full name: ").strip()
+            full_name = input("Administrator full name: ").strip().upper()
             username = input("Username: ").strip().casefold()
             password = getpass.getpass("Password (12+ characters): ")
             confirmation = getpass.getpass("Confirm password: ")
