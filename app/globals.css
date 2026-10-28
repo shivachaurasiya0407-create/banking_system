@@ -243,7 +243,7 @@ button:hover:not(:disabled) { background: var(--green-dark); }
 .sidebar-role-copy { display: grid; gap: 3px; }
 .sidebar-role-copy strong { color: var(--green-dark); font-size: .65rem; letter-spacing: .05em; }
 .sidebar-role-copy small { color: var(--muted); font-size: .62rem; }
-}
+
 .content-stage { min-width: 0; }
 .content-stage > .page-heading { padding-top: 0; }
 
