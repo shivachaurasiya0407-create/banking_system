@@ -14,16 +14,14 @@ depends_on = None
 
 
 def upgrade():
-    op.add_column(
-        "staff_users",
-        sa.Column("active_session_id", sa.String(length=36), nullable=True),
+    op.execute(
+        "ALTER TABLE staff_users ADD COLUMN IF NOT EXISTS active_session_id VARCHAR(36)"
     )
-    op.add_column(
-        "staff_users",
-        sa.Column("last_login_at", sa.DateTime(timezone=True), nullable=True),
+    op.execute(
+        "ALTER TABLE staff_users ADD COLUMN IF NOT EXISTS last_login_at TIMESTAMP WITH TIME ZONE"
     )
 
 
 def downgrade():
-    op.drop_column("staff_users", "last_login_at")
-    op.drop_column("staff_users", "active_session_id")
+    op.execute("ALTER TABLE staff_users DROP COLUMN IF EXISTS last_login_at")
+    op.execute("ALTER TABLE staff_users DROP COLUMN IF EXISTS active_session_id")
