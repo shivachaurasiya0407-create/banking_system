@@ -1,0 +1,19 @@
+services:
+  - type: web
+    name: banking-api
+    runtime: python
+    buildCommand: pip install -r requirements.txt
+    startCommand: python main.py
+    envVars:
+      - key: HOST
+        value: 0.0.0.0
+      - key: DATABASE_URL
+        sync: false
+      - key: JWT_SECRET
+        sync: false
+      - key: PII_HMAC_KEY
+        sync: false
+      - key: JWT_ISSUER
+        value: banking-system-local
+      - key: CORS_ORIGINS
+        value: "*"
